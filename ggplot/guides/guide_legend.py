@@ -4,6 +4,7 @@ import hashlib
 from itertools import islice
 from collections import OrderedDict
 
+import six
 from six import text_type
 from six.moves import zip, range
 import numpy as np
@@ -117,10 +118,10 @@ class guide_legend(guide):
         # guide entries may be ploted in the layers
         self.glayers = []
         for l in plot.layers:
-            all_ae = (l.mapping.viewkeys() |
+            all_ae = (six.viewkeys(l.mapping) |
                       plot.mapping if l.inherit_aes else set() |
-                      l.stat.DEFAULT_AES.viewkeys())
-            geom_ae = l.geom.REQUIRED_AES | l.geom.DEFAULT_AES.viewkeys()
+                      six.viewkeys(l.stat.DEFAULT_AES))
+            geom_ae = l.geom.REQUIRED_AES | six.viewkeys(l.geom.DEFAULT_AES)
             matched = all_ae & geom_ae & set(self.key.columns)
             matched = matched - set(l.geom.aes_params)
 
