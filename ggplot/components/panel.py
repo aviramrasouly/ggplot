@@ -2,11 +2,9 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import numpy as np
-import pandas as pd
 
 from ..scales.scales import Scales
-from ..utils import match, xy_panel_scales
-from ..utils import groupby_apply
+from ..utils import match, xy_panel_scales, suppress
 from ..utils.exceptions import GgplotError
 
 
@@ -21,6 +19,19 @@ class Panel(object):
     ranges = None     # list of n dicts.
     x_scales = None   # scale object(s). 1 or n of them
     y_scales = None   # scale object(s). 1 or n of them
+    axs = None        # MPL axes
+
+    def train_layout(self, facet, layer_data, plot_data):
+        self.layout = facet.train_layout([plot_data] + layer_data)
+        self.shrink = facet.shrink
+
+    def map_layout(self, facet, layer_data, plot_data):
+        new_data = []
+        for data in layer_data:
+            if data is None:
+                data = plot_data.copy()
+            new_data.append(facet.map_layout(data, self.layout))
+        return new_data
 
     def train_position(self, data, x_scale, y_scale):
         """
@@ -95,45 +106,6 @@ class Panel(object):
 
         return xy_panel_scales(x=xsc, y=ysc)
 
-    def calculate_stats(self, data, layers):
-        """
-        Calculate statistics
-
-        Parameters
-        ----------
-        data :  list of dataframes
-            one for each layer
-        layers : list of layers
-
-        Return
-        ------
-        data : list of dataframes
-            dataframes with statistic columns
-        """
-        new_data = []
-
-        def fn(panel_data, l):
-            """
-            For a specific panel with data 'panel_data',
-            compute the statistics in layer 'l' and
-            return the resulting dataframe
-            """
-            if len(panel_data) == 0:
-                return pd.DataFrame()
-
-            pscales = self.panel_scales(panel_data['PANEL'].iat[0])
-            return l.calc_statistic(panel_data, pscales)
-
-        # A dataframe in a layer can have rows split across
-        # multiple panels(facets). For each layer and accompanying
-        # data the statistics are calculated independently for
-        # each panel.
-        for (d, l) in zip(data, layers):
-            df = groupby_apply(d, 'PANEL', fn, l)
-            new_data.append(df)
-
-        return new_data
-
     def reset_scales(self):
         """
         Reset x and y scales
@@ -141,8 +113,11 @@ class Panel(object):
         if not self.shrink:
             return
 
-        self.x_scales.reset()
-        self.y_scales.reset()
+        with suppress(AttributeError):
+            self.x_scales.reset()
+
+        with suppress(AttributeError):
+            self.y_scales.reset()
 
     def train_ranges(self, coord):
         """

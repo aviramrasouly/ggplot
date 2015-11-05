@@ -4,13 +4,11 @@ from copy import deepcopy
 
 import pandas as pd
 
-from ..components.aes import aes, make_labels
+from ..components.aes import aes, make_labels, rename_aesthetics
 from ..components.layer import layer
 from ..utils.exceptions import GgplotError
-from ..utils import is_scalar_or_string, gg_import, defaults, suppress
-
-__all__ = ['geom']
-__all__ = [str(u) for u in __all__]
+from ..utils import gg_import, defaults, suppress, copy_keys
+from ..stats.stat import stat
 
 
 class geom(object):
@@ -20,31 +18,13 @@ class geom(object):
     DEFAULT_PARAMS = dict()
 
     data = None           # geom/layer specific dataframe
-    aes = None            # mappings i.e aes(x=col1, fill=col2, ...)
-    manual_aes = None     # setting of aesthetic
+    mapping = None        # mappings i.e aes(x=col1, fill=col2, ...)
+    aes_params = None     # setting of aesthetic
     params = None         # parameter settings
 
     # The geom responsible for the legend if draw_legend is
     # not implemented
-    guide_geom = 'point'
-
-    # Some geoms require more information than that provided by the
-    # user. This information is usually another aesthetic variable
-    # but it could another non-aesthetic variable. It is the duty
-    # of the associated statistic to calculate this information.
-    #
-    # For example:
-    #   A geom may have REQUIRED_AES = {'x', 'y'} and
-    #   the user may map or manually set only aesthetic 'x',
-    #   so the stat would have to calculate 'y'. However this
-    #   may not be enough, to actually make the plot the geom
-    #   may require the 'width' aesthetic. In this case, 'width'
-    #   would be the extra required information.
-    #
-    # geoms should fill out this set with what they require
-    # and is not in REQUIRED_AES
-    # see: geom_bar, stat_bin
-    _extra_requires = set()
+    legend_geom = 'point'
 
     # A matplotlib plot function may require that an aethestic have a
     # single unique value. e.g. linestyle='dashed' and not
@@ -60,84 +40,96 @@ class geom(object):
     _units = set()
 
     def __init__(self, *args, **kwargs):
-        self._cache = {}
-        self.valid_aes = set(self.DEFAULT_AES) ^ self.REQUIRED_AES
-        self.aes, self.data, kwargs = self._find_aes_and_data(args, kwargs)
+        kwargs = rename_aesthetics(kwargs)
+        kwargs = self._sanitize_arguments(args, kwargs)
+        self._cache = {'kwargs': kwargs}  # for making stat & layer
+        self._stat = self._make_stat()
+        self.verify_arguments(kwargs)     # geom, stat, layer
 
-        # This set will list the geoms that were uniquely set in this
-        # geom (not specified already i.e. in the ggplot aes).
-        self.aes_unique_to_geom = set(self.aes.keys())
+        # separate aesthetics and parameters
+        self.aes_params = copy_keys(kwargs, {}, self.aesthetics())
+        self.params = copy_keys(kwargs, deepcopy(self.DEFAULT_PARAMS))
+        self.mapping = kwargs['mapping']
+        self.data = kwargs['data']
 
-        with suppress(KeyError):
-            kwargs['color'] = kwargs.pop('colour')
-
-        # When a geom is created, some of the parameters may be meant
-        # for the stat and some for the layer.
-        # Some arguments are can be identified as either aesthetics to
-        # the geom and or parameter settings to the stat, in this case
-        # if the argument has a scalar value it is a setting for the stat.
-        stat_params = {}
-        self.params = deepcopy(self.DEFAULT_PARAMS)
-        self.manual_aes = {}
-        layer_params = {}
-        _layer_params = {'group', 'show_guide', 'inherit_aes'}
-        for p in _layer_params:
-            with suppress(KeyError):
-                layer_params[p] = self.params.pop(p)
-
-        stat_type = self._cache['stat_type']
-        stat_aes_params = (set(stat_type.DEFAULT_PARAMS) |
-                           stat_type.REQUIRED_AES)
-        for k, v in kwargs.items():
-            if k in self.aes:
-                raise GgplotError('Aesthetic, %s, specified twice' % k)
-            # geom recognizes aesthetic but stat wants it as a parameter,
-            # if it is a scalar the stat takes it
-            elif (k in self.valid_aes and
-                  k in stat_type.DEFAULT_PARAMS and
-                  is_scalar_or_string(kwargs[k])):
-                stat_params[k] = v
-            # geom mapping
-            elif k in self.valid_aes:
-                self.manual_aes[k] = v
-            # layer parameters
-            elif k in _layer_params:
-                layer_params[k] = kwargs[k]
-            # Override default geom parameters
-            elif k in self.DEFAULT_PARAMS:
-                self.params[k] = v
-            # stat parameters
-            elif k in stat_aes_params:
-                stat_params[k] = v
-            else:
-                raise GgplotError('Cannot recognize argument: %s' % k)
-
-        self._cache['stat_params'] = stat_params
-        self._cache['layer_params'] = layer_params
+    @classmethod
+    def aesthetics(cls):
+        """
+        Return all the aesthetics for this geom
+        """
+        main = cls.DEFAULT_AES.viewkeys() | cls.REQUIRED_AES
+        other = {'group'}
+        # Need to recognize both spellings
+        if 'color' in main:
+            other.add('colour')
+        if 'outlier_color' in main:
+            other.add('outlier_colour')
+        return main | other
 
     def __deepcopy__(self, memo):
         """
         Deep copy without copying the self.data dataframe
         """
-        # In case the object cannot be initialized with out
-        # arguments
-        class _empty(object):
-            pass
-        result = _empty()
-        result.__class__ = self.__class__
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
         for key, item in self.__dict__.items():
-            # don't make a deepcopy of data!
-            if key == "data":
+            if key == 'data':
                 result.__dict__[key] = self.__dict__[key]
-                continue
-            result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+            else:
+                result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+
         return result
 
-    @staticmethod
-    def reparameterise(data):
+    def setup_data(self, data):
         return data
 
-    def draw_groups(self, data, scales, coordinates, ax, **params):
+    def use_defaults(self, data):
+        """
+        Combine data with defaults and set aesthetics from parameters
+        """
+        missing_aes = (self.DEFAULT_AES.viewkeys() -
+                       self.aes_params.viewkeys() -
+                       set(data.columns))
+
+        # Not in data and not set, use default
+        for ae in missing_aes:
+            data[ae] = self.DEFAULT_AES[ae]
+
+        # If set, use it
+        for ae in self.aes_params:
+            data[ae] = self.aes_params[ae]
+
+        return data
+
+    def draw_layer(self, data, panel, coord, zorder):
+        """
+        Draw layer across all panels
+
+        Parameters
+        ----------
+        data : DataFrame
+            DataFrame specific for this layer
+        panel : Panel
+            Panel object created when the plot is getting
+            built
+        coord : coord
+            Type of coordinate axes
+        zorder : int
+            Stacking order of the layer in the plot
+        """
+        params = deepcopy(self.params)
+        params.update(self._stat.params)
+        params['zorder'] = zorder
+        for pid, pdata in data.groupby('PANEL'):
+            pdata.is_copy = None
+            ploc = pid - 1
+            panel_scales = panel.ranges[ploc]
+            ax = panel.axs[ploc]
+            self.draw_panel(pdata, panel_scales, coord, ax, **params)
+
+    def draw_panel(self, data, panel_scales, coord, ax, **params):
         """
         Plot all groups
 
@@ -157,7 +149,7 @@ class geom(object):
             the geom are:
                 - 'x_range' -- tuple
                 - 'y_range' -- tuple
-        coordinates : coord
+        coord : coord
             Coordinate (e.g. coord_cartesian) system of the
             geom
         ax : axes
@@ -169,153 +161,133 @@ class geom(object):
         for _, gdata in data.groupby('group'):
             pinfos = self._make_pinfos(gdata, params)
             for pinfo in pinfos:
-                self.draw(pinfo, scales, coordinates, ax, **params)
+                self.draw_group(pinfo, panel_scales, coord, ax, **params)
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
         msg = "The geom should implement this method."
         raise NotImplementedError(msg)
 
-    @property
-    def _stat(self):
-        """
-        Return stat instance for this geom
-
-        The stat is created once and stored in the cache.
-        The stat can only be created after the geom has
-        been initialized.
-
-        Alternatively a stat not automatically created by
-        the geom can add itself to the geoms cache.
-        See stat._geom
-        """
-        try:
-            stat = self._cache['stat']
-        except KeyError:
-            stat = self._cache['stat_type'](
-                geom=self.__class__.__name__[5:],
-                position=self.params['position'],
-                **self._cache['stat_params'])
-            self._cache['stat'] = stat
-        return stat
-
-    def _get_stat_type(self, kwargs):
-        """
-        Find out the stat and return the type object that can be
-        used(called) to create it.
-        For example, if the stat is 'smooth' we return
-        ggplot.stats.stat_smooth
-        """
-        name = 'stat_{}'.format(
-            kwargs.get('stat', self.DEFAULT_PARAMS['stat']))
-        self._cache['stat_type'] = gg_import(name)
-        return self._cache['stat_type']
-
     def __radd__(self, gg):
         gg = deepcopy(gg)
+
         # create and add layer
-        l = layer(geom=self,
-                  stat=self._stat,
-                  data=self.data,
-                  mapping=self.aes,
-                  position=self.params['position'],
-                  **self._cache['layer_params'])
-        gg.layers.append(l)
+        gg.layers.append(self._make_layer())
 
         # Add any new labels
-        mapping = make_labels(self.aes)
+        mapping = make_labels(self.mapping)
         default = make_labels(self._stat.DEFAULT_AES)
         new_labels = defaults(mapping, default)
         gg.labels = defaults(gg.labels, new_labels)
         return gg
 
-    def _find_aes_and_data(self, args, kwargs):
+    def _make_layer(self):
+        kwargs = self._cache['kwargs']
+        DP = self.DEFAULT_PARAMS
+        lkwargs = {'geom': self,
+                   'mapping': kwargs['mapping'],
+                   'data': kwargs['data'],
+                   'stat': self._stat,
+                   'position': kwargs.get('position',
+                                          DP['position'])}
+
+        for param in ('show_legend', 'inherit_aes'):
+            if param in kwargs:
+                lkwargs[param] = kwargs[param]
+            else:
+                with suppress(KeyError):
+                    lkwargs[param] = DP[param]
+
+        return layer(**lkwargs)
+
+    def _make_stat(self):
         """
-        Identify the aes and data objects.
+        Return stat instance for this geom
 
-        Return a dictionary of the aes mappings and
-        the data object.
-
-        - args is a list
-        - kwargs is a dictionary
-
-        Note: This is a helper function for self.__init__
-        It modifies the kwargs
+        Create a stat if none has been passed in the
+        kwargs
         """
-        passed_aes = {}
-        data = None
+        kwargs = self._cache['kwargs']
+        with suppress(KeyError):
+            if isinstance(kwargs['stat'], stat):
+                return kwargs['stat']
+
+        name = 'stat_{}'.format(
+            kwargs.get('stat', self.DEFAULT_PARAMS['stat']))
+        stat_klass = gg_import(name)
+        recognized = ((stat_klass.aesthetics() |
+                       stat_klass.DEFAULT_PARAMS.viewkeys()) &
+                      kwargs.viewkeys())
+        stat_params = {}
+        for p in recognized:
+            stat_params[p] = kwargs[p]
+        return stat_klass(geom=self.__class__.__name__[5:],
+                          **stat_params)
+
+    def _sanitize_arguments(self, args, kwargs):
+        """
+        Return kwargs with the mapping and data values
+        """
+        mapping, data = {}, None
         aes_err = ('Found more than one aes argument. '
                    'Expecting zero or one')
+        data_err = 'More than one dataframe argument'
 
+        # check args #
         for arg in args:
-            if isinstance(arg, aes) and passed_aes:
+            if isinstance(arg, aes) and mapping:
                 raise GgplotError(aes_err)
+            if isinstance(arg, pd.DataFrame) and data:
+                raise GgplotError(data_err)
+
             if isinstance(arg, aes):
-                passed_aes = arg
+                mapping = arg
             elif isinstance(arg, pd.DataFrame):
                 data = arg
             else:
                 msg = "Unknown argument of type '{0}'."
                 raise GgplotError(msg.format(type(arg)))
 
-        if 'mapping' in kwargs and passed_aes:
-            raise GgplotError(aes_err)
-        elif not passed_aes and 'mapping' in kwargs:
-            passed_aes = kwargs.pop('mapping')
+        # check kwargs #
+        # kwargs mapping has precedence over that in args
+        if 'mapping' not in kwargs:
+            kwargs['mapping'] = mapping
 
-        if data is None and 'data' in kwargs:
-            data = kwargs.pop('data')
+        if data is not None and 'data' in kwargs:
+            raise GgplotError(data_err)
+        elif 'data' not in kwargs:
+            kwargs['data'] = data
 
-        _aes = {}
-        # To make mapping of columns to geom/stat or stat parameters
-        # possible
-        stat = self._get_stat_type(kwargs)
-        _keep = set(self.DEFAULT_PARAMS) | set(stat.DEFAULT_PARAMS)
-        _keep.update(stat.DEFAULT_AES)
-        _keep.update(stat.REQUIRED_AES)
-        _keep.add('group')
-        for k, v in passed_aes.items():
-            if k in self.valid_aes or k in _keep:
-                _aes[k] = v
-        return _aes, data, kwargs
+        duplicates = set(kwargs['mapping']) & set(kwargs)
+        if duplicates:
+            msg = 'Aesthetics {} specified two times.'
+            raise GgplotError(msg.format(duplicates))
+        return kwargs
 
-    def _make_pinfos(self, data, kwargs):
-        """
-        Make plot information
+    def verify_arguments(self, kwargs):
+        unknown = (kwargs.viewkeys() -
+                   self.aesthetics() -                    # geom aesthetics
+                   self.DEFAULT_PARAMS.viewkeys() -       # geom parameters
+                   {'data', 'mapping'} -                  # layer parameters
+                   {'show_legend', 'inherit_aes'} -       # layer parameters
+                   self._stat.aesthetics() -              # stat aesthetics
+                   self._stat.DEFAULT_PARAMS.viewkeys())  # stat parameters
+        if unknown:
+            msg = 'Unknown parameters {}'
+            raise GgplotError(msg.format(unknown))
 
-        Put together the data and the default aesthetics into
-        groups that can be plotted in a single call to self.draw
-
-        Parameters
-        ----------
-        data : dataframe
-            The data to be split into groups
-        kwargs : dict
-            kwargs passed to the draw or draw_groups methods
-
-        Returns
-        -------
-        out : list of dict
-            Each dict represents a unique grouping, ready for
-            plotting
-            The dicts are of the form
-            {'column-name' | 'mpl-param-name': list-of-values | value}
-
-        Note
-        ----
-        This is a helper function for self.draw_group or self.draw
-        """
-        # (default aesthetics + data), grouped into plottable units
+    def _make_pinfos(self, data, params):
         units = []
         for col in data.columns:
             if col in self._units:
                 units.append(col)
 
-        shrinkable = {'alpha', 'fill', 'color', 'size', 'linetype'}
+        shrinkable = {'alpha', 'fill', 'color', 'size', 'linetype',
+                      'shape', 'outlier_shape'}
 
-        def shrink(pinfo):
+        def prep(pinfo):
             """
-            Reduce shrinkable parameters to scalars if possible.
+            Reduce shrinkable parameters &  append zorder
             """
             # If it is the same value in the list make it a scalar
             # This can help the matplotlib functions draw faster
@@ -323,30 +295,35 @@ class geom(object):
                 with suppress(TypeError, IndexError):
                     if all(pinfo[ae][0] == v for v in pinfo[ae]):
                         pinfo[ae] = pinfo[ae][0]
-            return pinfo
-
-        def prep(pinfo):
-            """
-            After data has been converted to a dict of lists
-            prepare it for plotting
-            """
-            pinfo.update(self.manual_aes)
-            pinfo = shrink(pinfo)
-            pinfo['zorder'] = kwargs['zorder']
+            pinfo['zorder'] = params['zorder']
             return pinfo
 
         out = []
         if units:
-            for name, _data in data.groupby(units):
-                pinfo = deepcopy(self.DEFAULT_AES)
-                pinfo.update(_data.to_dict('list'))
-                for ae in units:
-                    pinfo[ae] = pinfo[ae][0]
+            # Currently groupby does not like None values in any of
+            # the columns that participate in the grouping. These
+            # Nones come in when the default aesthetics are added to
+            # the data. We drop these columns and after turning the
+            # the dataframe into a dictionary insert a None for that
+            # aesthetic
+            _units = []
+            _none_units = []
+            for unit in units:
+                if data[unit].iloc[0] is None:
+                    _none_units.append(unit)
+                    del data[unit]
+                else:
+                    _units.append(unit)
 
+            for name, _data in data.groupby(_units):
+                pinfo = _data.to_dict('list')
+                for ae in _units:
+                    pinfo[ae] = pinfo[ae][0]
+                for ae in _none_units:
+                    pinfo[ae] = None
                 out.append(prep(pinfo))
         else:
-            pinfo = deepcopy(self.DEFAULT_AES)
-            pinfo.update(data.to_dict('list'))
+            pinfo = data.to_dict('list')
             out.append(prep(pinfo))
 
         return out

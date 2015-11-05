@@ -4,30 +4,29 @@ from __future__ import (absolute_import, division, print_function,
 import numpy as np
 import matplotlib.lines as mlines
 
-from ..utils import make_rgba
+from ..utils import to_rgba
 from .geom import geom
 
 
 class geom_point(geom):
     DEFAULT_AES = {'alpha': 1, 'color': 'black', 'fill': None,
-                   'shape': 'o', 'size': 5}
+                   'shape': 'o', 'size': 5, 'stroke': 1}
     REQUIRED_AES = {'x', 'y'}
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity'}
 
     _units = {'shape'}
 
-    def draw_groups(self, data, scales, coordinates, ax, **params):
+    def draw_panel(self, data, panel_scales, coord, ax, **params):
         """
         Plot all groups
         """
         pinfos = self._make_pinfos(data, params)
         for pinfo in pinfos:
-            self.draw(pinfo, scales, coordinates, ax, **params)
+            self.draw_group(pinfo, panel_scales, coord, ax, **params)
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
-        pinfo['fill'] = make_rgba(pinfo['fill'],
-                                  pinfo['alpha'])
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
+        pinfo['fill'] = to_rgba(pinfo['fill'], pinfo['alpha'])
 
         if pinfo['fill'] is None:
             pinfo['fill'] = pinfo['color']
@@ -35,11 +34,15 @@ class geom_point(geom):
         ax.scatter(x=pinfo['x'],
                    y=pinfo['y'],
                    facecolor=pinfo['fill'],
-                   color=pinfo['color'],
+                   edgecolor=pinfo['color'],
+                   linewidth=pinfo['stroke'],
                    marker=pinfo['shape'],
                    # Our size is in 'points' while
-                   # scatter wants 'points^2'
-                   s=np.square(pinfo['size']),
+                   # scatter wants 'points^2'. The
+                   # stroke is outside.
+                   s=np.square(
+                       np.array(pinfo['size']) +
+                       pinfo['stroke']),
                    zorder=pinfo['zorder'],
                    alpha=pinfo['alpha'])
 
@@ -61,12 +64,14 @@ class geom_point(geom):
         data.is_copy = None
         if data['fill'] is None:
             data['fill'] = data['color']
+
         key = mlines.Line2D([0.5*da.width],
                             [0.5*da.height],
                             alpha=data['alpha'],
                             marker=data['shape'],
                             markersize=data['size'],
                             markerfacecolor=data['fill'],
-                            markeredgecolor=data['color'])
+                            markeredgecolor=data['color'],
+                            markeredgewidth=data['stroke'])
         da.add_artist(key)
         return da

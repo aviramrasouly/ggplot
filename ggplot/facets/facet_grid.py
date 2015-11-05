@@ -12,8 +12,8 @@ class facet_grid(object):
                  space='fixed', shrink=True, labeller='label_value',
                  as_table=True, drop=True):
         # TODO: Implement faceting formula
-        self.rows = [x] if x else x
-        self.cols = [y] if y else y
+        self.rows = [] if x is None else [x]
+        self.cols = [] if y is None else [y]
         self.margins = margins
         self.shrink = shrink
         self.labeller = labeller
@@ -41,22 +41,16 @@ class facet_grid(object):
         self.ncol = layout['COL'].max()
         return layout
 
-    def map_layout(self, layout, data, plot_data):
+    def map_layout(self, data, layout):
         """
         Assign a data points to panels
 
         Parameters
         ----------
+        data : DataFrame
+            dataframe for a layer
         layout : dataframe
             As returned by self.train_layout
-        data : list
-            dataframe for each layer or None
-        plot_data : dataframe
-            default data. Specified in the call to  ggplot
         """
-        _data = []
-        for df in data:
-            if df is None:
-                df = plot_data.copy()
-            _data.append(locate_grid(df, layout, self.rows, self.cols))
-        return _data
+        return locate_grid(data, layout, self.rows, self.cols,
+                           margins=self.margins)

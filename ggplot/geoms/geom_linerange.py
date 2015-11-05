@@ -53,10 +53,10 @@ class geom_linerange(geom):
                    'linetype': 'solid', 'size': 1.5}
     REQUIRED_AES = {'x', 'ymin', 'ymax'}
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity'}
-    guide_geom = 'path'
+    legend_geom = 'path'
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
         pinfo['xend'] = pinfo['x']
         pinfo['y'], pinfo['yend'] = pinfo['ymin'], pinfo['ymax']
-        geom_segment.draw(pinfo, scales, coordinates, ax, **params)
+        geom_segment.draw_group(pinfo, panel_scales, coord, ax, **params)

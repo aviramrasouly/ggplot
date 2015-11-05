@@ -77,6 +77,7 @@ class guide_colorbar(guide):
                           ' '.join(self.bar['color'].tolist()),
                           self.__class__.__name__])
         self.hash = hashlib.md5(info.encode('utf-8')).hexdigest()
+        return self
 
     def merge(self, other):
         """
@@ -121,6 +122,7 @@ class guide_colorbar(guide):
         direction = self.direction
         colors = self.bar['color'].tolist()
         labels = self.key['label'].tolist()
+        themeable = theme.figure._themeable
 
         # .5 puts the ticks in the middle of the bars when
         # raster=False. So when raster=True the ticks are
@@ -141,9 +143,9 @@ class guide_colorbar(guide):
             tick_locations = length - tick_locations[::-1]
 
         # title #
-        # TODO: theme me
         title_box = TextArea(
             self.title, textprops=dict(color='k', weight='bold'))
+        themeable['legend_title'] = title_box
 
         # colorbar and ticks #
         da = ColoredDrawingArea(width, height, 0, 0)
@@ -157,7 +159,10 @@ class guide_colorbar(guide):
 
         # labels #
         if self.label:
-            labels_da = create_labels(da, labels, tick_locations, direction)
+            labels_da, _themeable = create_labels(da, labels,
+                                                  tick_locations,
+                                                  direction)
+            themeable.update(_themeable)
         else:
             labels_da = ColoredDrawingArea(0, 0)
 
@@ -193,6 +198,11 @@ def add_interpolated_colorbar(da, colors, direction):
     """
     Add 'rastered' colorbar to DrawingArea
     """
+    # Special case that arises due to not so useful
+    # aesthetic mapping.
+    if len(colors) == 1:
+        colors = [colors[0], colors[0]]
+
     # Number of horizontal egdes(breaks) in the grid
     # No need to create more nbreak than colors, provided
     # no. of colors = no. of breaks = no. of cmap colors
@@ -294,7 +304,7 @@ def create_labels(da, labels, locations, direction):
     # the text objects. We put two dummy children at
     # either end to gaurantee that when center packed
     # the labels in the labels_box matchup with the ticks.
-    fontsize = 12
+    fontsize = 9
     aux_transform = mtransforms.IdentityTransform()
     labels_box = AuxTransformBox(aux_transform)
     xs, ys = [0]*len(labels), locations
@@ -315,14 +325,15 @@ def create_labels(da, labels, locations, direction):
     labels_box.add_artist(txt1)
     labels_box.add_artist(txt2)
 
-    # TODO: Theme me
+    legend_text = []
     for i, (x, y, text) in enumerate(zip(xs, ys, labels)):
         txt = mtext.Text(x, y, text,
                          size=fontsize,
                          horizontalalignment=ha,
                          verticalalignment=va)
         labels_box.add_artist(txt)
-    return labels_box
+        legend_text.append(txt)
+    return labels_box, {'legend_text': legend_text}
 
 
 guide_colourbar = guide_colorbar

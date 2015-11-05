@@ -6,15 +6,15 @@ from copy import deepcopy
 import six
 from patsy.eval import EvalEnvironment
 
-from ..utils import defaults, suppress
+from ..utils import suppress
 
 all_aesthetics = {
     'alpha', 'angle', 'color', 'colour', 'fill', 'group',
     'hjust', 'label', 'linetype', 'lower', 'lwd', 'middle',
-    'order', 'radius', 'sample', 'shape', 'size', 'upper',
-    'vjust', 'weight', 'width', 'x', 'xend', 'xmax', 'xmin',
-    'xintercept', 'y', 'yend', 'ymax', 'ymin', 'yintercept',
-    'z'}
+    'order', 'radius', 'sample', 'shape', 'size', 'stroke',
+    'upper', 'vjust', 'weight', 'width', 'x', 'xend', 'xmax',
+    'xmin', 'xintercept', 'y', 'yend', 'ymax', 'ymin',
+    'yintercept', 'z'}
 
 
 class aes(dict):
@@ -62,27 +62,37 @@ class aes(dict):
     DEFAULT_ARGS = ['x', 'y', 'color']
 
     def __init__(self, *args, **kwargs):
+        kwargs = rename_aesthetics(kwargs)
         if args:
             dict.__init__(self, zip(self.DEFAULT_ARGS, args))
         if kwargs:
             self.update(kwargs)
-        if 'colour' in self:
-            self['color'] = self.pop('colour')
 
         self.aes_env = EvalEnvironment.capture(1)
 
     def __deepcopy__(self, memo):
-        '''deepcopy support for ggplot'''
+        """
+        Deep copy without copying the environment
+        """
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
         # Just copy the keys and point to the env
-        result = aes()
         for key, item in self.items():
-            try:
-                result[key] = deepcopy(self[key], memo)
-            except:
-                raise
+            result[key] = deepcopy(self[key], memo)
 
         result.aes_env = self.aes_env
         return result
+
+
+def rename_aesthetics(d):
+    with suppress(KeyError):
+        d['color'] = d.pop('colour')
+
+    with suppress(KeyError):
+        d['outlier_color'] = d.pop('outlier_colour')
+    return d
 
 
 def is_calculated_aes(aesthetics):
@@ -124,33 +134,6 @@ def is_position_aes(vars_):
         return all([aes_to_scale(v) in {'x', 'y'} for v in vars_])
     except TypeError:
         return aes_to_scale(vars_) in {'x', 'y'}
-
-
-def aesdefaults(data, y, params):
-    """
-    Convenience method for setting aesthetic defaults
-
-    Parameters
-    ----------
-    data : dataframe
-        data values from aesthetic mappings
-    y : dict
-        defaults
-    params : dict
-        user specified values
-    """
-    updated = y.copy()
-    if params is not None:
-        updated.update(params)
-
-    cols = defaults(data, updated)
-
-    # TODO:
-    # Need to be careful here because stat_boxplot uses a
-    # list-column to store a vector of outliers
-    # !!!
-    df = cols
-    return df
 
 
 def make_labels(mapping):

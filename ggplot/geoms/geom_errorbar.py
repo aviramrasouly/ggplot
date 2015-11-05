@@ -13,9 +13,9 @@ class geom_errorbar(geom):
     REQUIRED_AES = {'x', 'ymin', 'ymax'}
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity',
                       'width': 0.5}
-    guide_geom = 'path'
+    legend_geom = 'path'
 
-    def reparameterise(self, data):
+    def setup_data(self, data):
         if 'width' not in data:
             if self.params['width']:
                 data['width'] = self.params['width']
@@ -28,11 +28,11 @@ class geom_errorbar(geom):
         return data
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
         # create (two horizontal bars) + vertical bar
         p1 = copy(pinfo)
         p1['x'] = (pinfo['xmin']*2) + pinfo['x']
         p1['xend'] = (pinfo['xmax']*2) + pinfo['x']
         p1['y'] = (pinfo['ymin'] + pinfo['ymax']) + pinfo['ymin']
         p1['yend'] = (pinfo['ymin'] + pinfo['ymax']) + pinfo['ymax']
-        geom_segment.draw(p1, scales, coordinates, ax, **params)
+        geom_segment.draw_group(p1, panel_scales, coord, ax, **params)

@@ -1,25 +1,16 @@
-"""
-Theme elements:
-
-* element_line
-* element_rect
-* element_text
-* element_title
-
-These elements define what operations can be performed. The specific targets,
-eg. line, rect, text, title and their derivatives axis_title or axis_title_x
-specify the scope of the theme application.
-
-"""
 from copy import copy, deepcopy
 
-from .element_target import element_target_factory, merge_element_targets
-from .element_target import other_targets
+import matplotlib as mpl
+
+from ..utils.exceptions import GgplotError
+from .themeable import make_themeable, merge_themeables
+from .themeable import scalar_themeables
 
 
 class theme(object):
 
-    """This is an abstract base class for themes.
+    """
+    This is an abstract base class for themes.
 
     In general, only complete themes should should subclass this class.
 
@@ -30,13 +21,13 @@ class theme(object):
     implemented.
 
     __init__: This should call super().__init__ which will define
-    self._rcParams. Subclasses should customize self._rcParams after calling
-    super().__init__. That will ensure that the rcParams are applied at
-    the appropriate time.
+    self._rcParams. Subclasses should customize self._rcParams after
+    calling super().__init__. That will ensure that the rcParams are
+    applied at the appropriate time.
 
-    The other method is apply_theme(ax). This method takes an axes object that
-    has been created during the plot process. The theme should modify the
-    axes according.
+    The other method is apply_more(ax). This method takes an axes
+    object that has been created during the plot process. The theme
+    should modify the axes according.
 
     """
 
@@ -51,47 +42,87 @@ class theme(object):
             themes that are not complete (ie. partial) will add to or
             override specific elements of the current theme.
 
-            eg. theme_matplotlib() + theme_xkcd() will be completely
-            determined by theme_xkcd, but
-            theme_matplotlib() + theme(axis_text_x=element_text(angle=45)) will
-            only modify the x axis text.
+            eg.
+                theme_matplotlib() + theme_xkcd()
 
-        kwargs**: theme_element
-            kwargs are theme_elements based on
+            will be completely determined by theme_xkcd, but
+
+                (theme_matplotlib() +
+                    theme(axis_text_x=element_text(angle=45)))
+
+            will only modify the x axis text.
+
+        kwargs**: themeables
+            kwargs are themeables based on
             http://docs.ggplot2.org/current/theme.html.
-            Currently only a subset of the elements are implemented.
             In addition, Python does not allow using '.' in argument
-            names, so we are using '_'
-            instead.
+            names, so we are using '_' instead.
 
             For example, ggplot2 axis.ticks.y will be axis_ticks_y
             in Python ggplot.
 
+            Many themeables are defined using theme elements i.e
+
+                - element_line
+                - element_rect
+                - element_text
+
+            These simply bind together all the aspects of a themeable
+            that can be themed.
         """
         self.element_themes = []
         self.complete = complete
         self._rcParams = {}
-        # theming parameters that matplolib cannot deal with
-        self._params = other_targets.copy()
+        # This is set when the figure is created,
+        # it is useful at legend drawing time.
+        self.figure = None
+        self._params = scalar_themeables.copy()
 
-        for target_name, theme_element in kwargs.items():
-            if target_name in other_targets:
-                self._params[target_name] = theme_element
+        for name, theme_element in kwargs.items():
+            if name in scalar_themeables:
+                self._params[name] = theme_element
             else:
                 self.element_themes.append(
-                    element_target_factory(target_name, theme_element))
+                    make_themeable(name, theme_element))
 
-    def apply_theme(self, ax):
-        """apply_theme will be called with an axes object after plot has completed.
+    def apply(self, ax):
+        """
+        Apply this theme, then apply additional modifications in order.
 
-        Complete themes should implement this method if post plot themeing is
-        required.
+        This method should not be overridden. Subclasses should override
+        the apply_more method. This implementation will ensure that the
+        a theme that includes partial themes will be themed properly.
+        """
+        # Restyle the tick lines
+        for line in ax.get_xticklines() + ax.get_yticklines():
+            line.set_markeredgewidth(mpl.rcParams['grid.linewidth'])
 
+        # minor grid line
+        if mpl.rcParams['axes.grid.which'] in ('minor', 'both'):
+            lw = mpl.rcParams['grid.linewidth']/2.0
+            ax.xaxis.grid(which='minor', linewidth=lw)
+            ax.yaxis.grid(which='minor', linewidth=lw)
+
+        self.apply_more(ax)
+
+        # does this need to be ordered first?
+        for element_theme in self.element_themes:
+            element_theme.apply(ax)
+
+    def apply_more(self, ax):
+        """
+        Makes any desired changes to the axes object
+
+        This method will be called with an axes object after plot
+        has completed. Complete themes should implement this method
+        if post plot themeing is required.
         """
         pass
 
-    def get_rcParams(self):
-        """Get an rcParams dict for this theme.
+    @property
+    def rcParams(self):
+        """
+        Return rcParams dict for this theme.
 
         Notes
         -----
@@ -99,7 +130,7 @@ class theme(object):
         self._rcParams is constructed properly.
 
         rcParams are used during plotting. Sometimes the same theme can be
-        achieved by setting rcParams before plotting or a post_plot_callback
+        achieved by setting rcParams before plotting or a apply
         after plotting. The choice of how to implement it is is a matter of
         convenience in that case.
 
@@ -120,23 +151,8 @@ class theme(object):
 
         if self.element_themes:
             for element_theme in self.element_themes:
-                rcparams = element_theme.get_rcParams()
-            rcParams.update(rcparams)
+                rcParams.update(element_theme.rcParams)
         return rcParams
-
-    def post_plot_callback(self, ax, *args, **kwargs):
-        """Apply this theme, then apply additional modifications in order.
-
-        This method should not be overridden. Subclasses should override
-        the apply_theme subclass. This implementation will ensure that the
-        a theme that includes partial themes will be themed properly.
-
-        """
-        self.apply_theme(ax, *args, **kwargs)
-        # does this need to be ordered first?
-        for element_theme in self.element_themes:
-            print('element_theme.post_plot_callback')
-            element_theme.post_plot_callback(ax)
 
     def add_theme(self, other):
         """Add themes together.
@@ -152,17 +168,18 @@ class theme(object):
             return other
         else:
             theme_copy = deepcopy(self)
-            theme_copy.element_themes = merge_element_targets(
+            theme_copy.element_themes = merge_themeables(
                 deepcopy(self.element_themes),
                 deepcopy(other.element_themes))
             theme_copy._params.update(other._params)
             return theme_copy
 
     def __add__(self, other):
-        if isinstance(other, theme):
-            return self.add_theme(other)
-        else:
-            raise TypeError()
+        if not isinstance(other, theme):
+            msg = ("Adding theme failed. ",
+                   "{} is not a theme").format(str(other))
+            raise GgplotError(msg)
+        return self.add_theme(other)
 
     def __radd__(self, other):
         """Subclasses should not override this method.

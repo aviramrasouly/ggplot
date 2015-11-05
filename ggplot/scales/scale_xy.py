@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 
 from ..utils import identity, match, is_waive
-from ..utils import DISCRETE_DTYPES, CONTINUOUS_DTYPES
+from ..utils import DISCRETE_KINDS, CONTINUOUS_KINDS
 from ..utils.exceptions import GgplotError
 from .utils import expand_range
-from .utils import log10_trans, sqrt_trans, identity_trans
+from .utils import identity_trans
 from .scale import scale_discrete, scale_continuous
 
 
@@ -39,13 +39,18 @@ class scale_position_discrete(scale_discrete):
         # no way to recover values
         self.range_c = None
 
+    def is_empty(self):
+        return (self.range is None and
+                self.limits is None and
+                self.range_c is None)
+
     def train(self, series):
         # The discrete position scale is capable of doing
         # training for continuous data.
         # This complicates training and mapping, but makes it
         # possible to place objects at non-integer positions,
         # as is necessary for jittering etc.
-        if series.dtype in CONTINUOUS_DTYPES:
+        if series.dtype.kind in CONTINUOUS_KINDS:
             # trick the training method into training
             # range_c by temporarily renaming it to range
             backup, self.range = self.range, self.range_c
@@ -61,13 +66,16 @@ class scale_position_discrete(scale_discrete):
         # at 1
         if not limits:
             limits = self.limits
-        if series.dtype in DISCRETE_DTYPES:
+        if series.dtype.kind in DISCRETE_KINDS:
             seq = np.arange(1, len(limits)+1)
             return seq[match(series, limits)]
         return series
 
     @property
     def limits(self):
+        if self.is_empty():
+            return (0, 1)
+
         if self._limits:
             return self._limits
         elif self.range:
@@ -77,7 +85,7 @@ class scale_position_discrete(scale_discrete):
             # discrete limits for a continuous range
             mn = int(np.floor(np.min(self.range_c)))
             mx = int(np.ceil(np.max(self.range_c)))
-            return range(mn, mx+1)
+            return list(range(mn, mx+1))
         else:
             raise GgplotError(
                 'Lost, do not know what the limits are.')
@@ -95,7 +103,7 @@ class scale_position_discrete(scale_discrete):
 
         return rng
 
-    def dimension(self, expand=None):
+    def dimension(self, expand=(0, 0)):
         """
         The phyical size of the scale, if a position scale
         Unlike limits, this always returns a numeric vector of length 2
@@ -104,8 +112,6 @@ class scale_position_discrete(scale_discrete):
         # calculate a dimension acc. to the discrete items(limits)
         # and a dimension acc. to the continuous range (range_c)
         # pick the (min, max)
-        if expand is None:
-            expand = self.expand
         disc_range = (1, len(self.limits))
         disc = expand_range(disc_range, 0, expand[1], 1)
         cont = expand_range(self.range_c, expand[0], 0, expand[1])
@@ -143,20 +149,21 @@ class scale_position_continuous(scale_continuous):
 
 
 class scale_x_discrete(scale_position_discrete):
-    aesthetics = ["x", "xmin", "xmax", "xend"]
+    aesthetics = ['x', 'xmin', 'xmax', 'xend']
 
 
 class scale_y_discrete(scale_position_discrete):
-    aesthetics = ["y", "ymin", "ymax", "yend"]
+    aesthetics = ['y', 'ymin', 'ymax', 'yend']
 
 
 class scale_x_continuous(scale_position_continuous):
-    aesthetics = ["x", "xmin", "xmax", "xend", "xintercept"]
+    aesthetics = ['x', 'xmin', 'xmax', 'xend', 'xintercept']
 
 
 class scale_y_continuous(scale_position_continuous):
-    aesthetics = ["y", "ymin", "ymax", "yend", "yintercept",
-                  "ymin_final", "ymax_final"]
+    aesthetics = ['y', 'ymin', 'ymax', 'yend', 'yintercept',
+                  'ymin_final', 'ymax_final',
+                  'lower', 'middle', 'upper']
 
 
 # Transformed scales
@@ -172,6 +179,16 @@ class scale_y_datetime(scale_position_continuous):
 
 scale_x_date = scale_x_datetime
 scale_y_date = scale_y_datetime
+
+
+class scale_x_timedelta(scale_position_continuous):
+    trans = 'timedelta'
+    aesthetics = ['x', 'xmin', 'xmax', 'xend']
+
+
+class scale_y_timedelta(scale_position_continuous):
+    trans = 'timedelta'
+    aesthetics = ['y', 'ymin', 'ymay', 'yend']
 
 
 class scale_x_sqrt(scale_x_continuous):
@@ -204,5 +221,3 @@ class scale_x_reverse(scale_x_continuous):
 class scale_y_reverse(scale_y_continuous):
     trans = identity_trans()
     trans.modify_axis = MethodType(_modify_axis, trans)
-
-# TODO: breaks and labels parameters for transformed scales

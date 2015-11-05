@@ -1,12 +1,12 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import numpy as np
 import pandas as pd
 from matplotlib.collections import PolyCollection
 from matplotlib.patches import Rectangle
-import matplotlib.lines as lines
 
-from ..utils import make_rgba, make_iterable
+from ..utils import to_rgba, make_iterable
 from .geom import geom
 
 
@@ -16,16 +16,16 @@ class geom_polygon(geom):
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity'}
     REQUIRED_AES = {'x', 'y'}
 
-    def draw_groups(self, data, scales, coordinates, ax, **params):
+    def draw_panel(self, data, panel_scales, coord, ax, **params):
         """
         Plot all groups
         """
         pinfos = self._make_pinfos(data, params)
         for pinfo in pinfos:
-            self.draw(pinfo, scales, coordinates, ax, **params)
+            self.draw_group(pinfo, panel_scales, coord, ax, **params)
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
         # Each group is a polygon with a single facecolor
         # with potentially an edgecolor for every edge.
         # And like ggplot, alpha applies to the facecolor
@@ -34,7 +34,7 @@ class geom_polygon(geom):
         verts, facecolor = [], []
         for group, df in grouped:
             verts.append(tuple(zip(df['x'], df['y'])))
-            fc = make_rgba(df['fill'].iloc[0], df['alpha'].iloc[0])
+            fc = to_rgba(df['fill'].iloc[0], df['alpha'].iloc[0])
             facecolor.append('none' if fc is None else fc)
 
         edgecolor = ['none' if c is None else c
@@ -66,35 +66,24 @@ class geom_polygon(geom):
         -------
         out : DrawingArea
         """
-        # ggplot leaves out the linetpe when drawing the
-        # rectangle despite being helpful in some cases.
-        # We check if linetype is mapped to in the layer
-        # responsible for this legend entry, and
-        # only then do we include it
-        kwargs = {}
-        if 'linetype' in lyr._active_mapping:
-            kwargs['linestyle'] = data['linetype']
+        # We take into account that the linewidth
+        # bestrides the boundary of the rectangle
+        linewidth = np.min([data['size'],
+                            da.width/4, da.height/4])
+        if data['color'] is None:
+            linewidth = 0
 
-        # background
-        facecolor = make_rgba(data['fill'], data['alpha'])
+        facecolor = to_rgba(data['fill'], data['alpha'])
         if facecolor is None:
             facecolor = 'none'
-        bg = Rectangle((0, 0),
-                       width=da.width,
-                       height=da.height,
-                       facecolor=facecolor,
-                       edgecolor=data['color'],
-                       capstyle='projecting',
-                       **kwargs)
-        da.add_artist(bg)
 
-        # diagonal strike through
-        if data['color']:
-            strike = lines.Line2D([0, da.width],
-                                  [0, da.height],
-                                  linestyle=data['linetype'],
-                                  linewidth=data['size'],
-                                  color=data['color'],
-                                  solid_capstyle='butt')
-            da.add_artist(strike)
+        rect = Rectangle((0+linewidth/2, 0+linewidth/2),
+                         width=da.width-linewidth,
+                         height=da.height-linewidth,
+                         linewidth=linewidth,
+                         linestyle=data['linetype'],
+                         facecolor=facecolor,
+                         edgecolor=data['color'],
+                         capstyle='projecting')
+        da.add_artist(rect)
         return da

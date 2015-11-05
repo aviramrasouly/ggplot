@@ -131,7 +131,7 @@ class guides(dict):
             # each guide object trains scale within the object,
             # so Guides (i.e., the container of guides)
             # need not to know about them
-            guide.train(scale)
+            guide = guide.train(scale)
 
             if guide is not None:
                 gdefs.append(guide)
@@ -174,9 +174,10 @@ class guides(dict):
         grouped = df.groupby('hash')
         gdefs = []
         for name, group in grouped:
-            gdef = reduce(
-                lambda g1, g2: g1.merge(g2),
-                group['gdef'])
+            # merge
+            gdef = group['gdef'].iloc[0]
+            for g in group['gdef'].iloc[1:]:
+                gdef = gdef.merge(g)
             gdefs.append(gdef)
         return gdefs
 

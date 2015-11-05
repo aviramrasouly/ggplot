@@ -15,47 +15,53 @@ class theme_xkcd(theme):
 
     """
     def __init__(self, scale=1, length=100, randomness=2):
-        super(theme_xkcd, self).__init__(complete=True)
+        theme.__init__(self, complete=True)
         with plt.xkcd(scale=scale, length=length, randomness=randomness):
             _xkcd = mpl.rcParams.copy()
+
         # no need to a get a deprecate warning for nothing...
         for key in mpl._deprecated_map:
             if key in _xkcd:
                 del _xkcd[key]
+
         if 'tk.pythoninspect' in _xkcd:
             del _xkcd['tk.pythoninspect']
+
         self._rcParams.update(_xkcd)
 
+        d = {
+             'figure.figsize': '11, 8',
+             'figure.subplot.hspace': '0.5'}
+        self._rcParams.update(d)
+
     def __deepcopy__(self, memo):
-        class _empty(object):
-            pass
-        result = _empty()
-        result.__class__ = self.__class__
-        result.__dict__['element_themes'] = deepcopy(self.element_themes)
-        result.__dict__["_rcParams"] = {}
+        """
+        Deep copy support for theme_xkcd
+        """
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
+        for key, item in self.__dict__.items():
+            if key == '_rcParams':
+                continue
+
+            result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+
+        result._rcParams = {}
         for k, v in self._rcParams.items():
             try:
-                result.__dict__["_rcParams"][k] = deepcopy(v, memo)
+                result._rcParams[k] = deepcopy(v, memo)
             except NotImplementedError:
                 # deepcopy raises an error for objects that are drived from or
                 # composed of matplotlib.transform.TransformNode.
                 # Not desirable, but probably requires upstream fix.
                 # In particular, XKCD uses matplotlib.patheffects.withStrok
                 # -gdowding
-                result.__dict__["_rcParams"][k] = copy(v)
+                result._rcParams[k] = copy(v)
 
         return result
 
-    def apply_theme(self, ax):
-        """"
-        Styles x,y axes to appear like ggplot2
-        Must be called after all plot and axis manipulation operations have
-        been carried out (needs to know final tick spacing)
-
-        From:
-        https://github.com/wrobstory/climatic/blob/master/climatic/stylers.py
-        """
-        # Restyle the tick lines
+    def apply_more(self, ax):
         for line in ax.get_xticklines() + ax.get_yticklines():
-            line.set_markersize(5)
-            line.set_markeredgewidth(mpl.rcParams['grid.linewidth'])
+            line.set_markeredgewidth(2)

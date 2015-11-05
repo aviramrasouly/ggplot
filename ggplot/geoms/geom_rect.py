@@ -4,7 +4,7 @@ from __future__ import (absolute_import, division, print_function,
 from matplotlib.collections import PolyCollection
 from six.moves import zip
 
-from ..utils import make_iterable, make_rgba
+from ..utils import make_iterable, to_rgba
 from .geom import geom
 
 
@@ -26,23 +26,23 @@ class geom_rect(geom):
     size
     """
 
-    DEFAULT_AES = {'color': None, 'fill': '#333333',
+    DEFAULT_AES = {'color': None, 'fill': '#595959',
                    'linetype': 'solid', 'size': 1.5, 'alpha': 1}
 
     REQUIRED_AES = {'xmax', 'xmin', 'ymax', 'ymin'}
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity'}
-    guide_geom = 'polygon'
+    legend_geom = 'polygon'
 
-    def draw_groups(self, data, scales, coordinates, ax, **params):
+    def draw_panel(self, data, panel_scales, coord, ax, **params):
         """
         Plot all groups
         """
         pinfos = self._make_pinfos(data, params)
         for pinfo in pinfos:
-            self.draw(pinfo, scales, coordinates, ax, **params)
+            self.draw_group(pinfo, panel_scales, coord, ax, **params)
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
         def fn(key):
             return make_iterable(pinfo.pop(key))
 
@@ -56,8 +56,7 @@ class geom_rect(geom):
         for i, (l, r, b, t) in enumerate(limits):
             verts[i] = [(l, b), (l, t), (r, t), (r, b)]
 
-        pinfo['fill'] = make_rgba(pinfo['fill'],
-                                  pinfo['alpha'])
+        pinfo['fill'] = to_rgba(pinfo['fill'], pinfo['alpha'])
 
         if pinfo['color'] is None:
             pinfo['color'] = ''

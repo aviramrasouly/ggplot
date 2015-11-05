@@ -9,7 +9,7 @@ from six.moves import range
 from functools import reduce
 
 from ..components.aes import aes_to_scale
-from ..utils import DISCRETE_DTYPES, CONTINUOUS_DTYPES
+from ..utils import DISCRETE_KINDS, CONTINUOUS_KINDS
 from ..utils import gg_import
 from ..utils.exceptions import gg_warn, GgplotError
 
@@ -162,7 +162,7 @@ class Scales(list):
         Train scales from a dataframe
         """
         if (len(df) == 0) or (len(self) == 0):
-            return
+            return df
 
         # Each scale trains the columns it understands
         for sc in self:
@@ -176,7 +176,7 @@ class Scales(list):
         Returns dataframe
         """
         if (len(df) == 0) or (len(self) == 0):
-            return
+            return df
 
         # Each scale maps the columns it understands
         for sc in self:
@@ -190,7 +190,7 @@ class Scales(list):
         Returns dataframe
         """
         if (len(df) == 0) or (len(self) == 0):
-            return
+            return df
 
         # Each scale transforms the columns it understands
         for sc in self:
@@ -211,10 +211,10 @@ def scales_add_defaults(scales, data, aesthetics):
         return
 
     # aesthetics with scales
+    aws = set()
     if scales:
-        aws = reduce(set.union, [set(sc.aesthetics) for sc in scales])
-    else:
-        aws = set()
+        for s in (set(sc.aesthetics) for sc in scales):
+            aws.update(s)
 
     # aesthetics that do not have scales present
     new_aesthetics = set(aesthetics.keys()) - aws
@@ -266,12 +266,14 @@ def scales_add_missing(plot, aesthetics):
 
 
 def scale_type(series):
-    if series.dtype in CONTINUOUS_DTYPES:
+    if series.dtype.kind in CONTINUOUS_KINDS:
         stype = 'continuous'
-    elif series.dtype in DISCRETE_DTYPES:
+    elif series.dtype.kind in DISCRETE_KINDS:
         stype = 'discrete'
-    elif series.dtype == np.dtype('<M8[ns]'):
+    elif series.dtype.kind == 'M':
         stype = 'datetime'
+    elif series.dtype.kind == 'm':
+        stype = 'timedelta'
     else:
         msg = ("Don't know how to automatically pick scale for "
                "object of type {}. Defaulting to 'continuous'")

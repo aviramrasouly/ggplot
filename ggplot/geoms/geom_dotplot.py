@@ -5,7 +5,7 @@ import matplotlib.collections as mcoll
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
-from ..utils import groupby_apply, make_rgba
+from ..utils import groupby_apply, to_rgba
 from ..utils.exceptions import gg_warn
 from ..scales.utils import resolution
 from .geom import geom
@@ -17,8 +17,6 @@ class geom_dotplot(geom):
     DEFAULT_PARAMS = {'stat': 'bindot', 'position': 'identity',
                       'stackdir': 'up', 'stackratio': 1,
                       'dotsize': 1, 'stackgroups': False}
-
-    _extra_requires = {'width'}
 
     @classmethod
     def _verify(cls, **params):
@@ -35,7 +33,7 @@ class geom_dotplot(geom):
                     "method='dotdensity'. You probably want to set "
                     "binpositions='all'")
 
-    def reparameterise(self, data):
+    def setup_data(self, data):
         gp = self.params
         sp = self._stat.params
 
@@ -124,18 +122,18 @@ class geom_dotplot(geom):
         return data
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
         geom_dotplot._verify(**params)
 
-        pinfo['fill'] = make_rgba(pinfo['fill'],
-                                  pinfo['alpha'])
+        pinfo['fill'] = to_rgba(pinfo['fill'], pinfo['alpha'])
         x = np.asarray(pinfo['x'])
         y = np.asarray(pinfo['y'])
+        ranges = coord.range(panel_scales)
         # For perfect circles the width/height of the circle(ellipse)
         # should factor in the figure dimensions
         fw, fh = ax.figure.get_figwidth(), ax.figure.get_figheight()
         factor = ((fw/fh) *
-                  np.ptp(scales['y_range'])/np.ptp(scales['x_range']))
+                  np.ptp(ranges.y)/np.ptp(ranges.x))
         size = pinfo['binwidth'][0] * params['dotsize']
         offsets = np.asarray(pinfo['stackpos']) * params['stackratio']
 

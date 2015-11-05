@@ -2,13 +2,12 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from copy import deepcopy
 
+import six
 import pandas as pd
 
-from ..utils import uniquecols, gg_import
+from ..utils import uniquecols, gg_import, check_required_aesthetics
+from ..utils import groupby_apply, copy_keys, suppress
 from ..utils.exceptions import GgplotError
-
-__all__ = ['stat']
-__all__ = [str(u) for u in __all__]
 
 
 class stat(object):
@@ -31,42 +30,93 @@ class stat(object):
     CREATES = set()
 
     def __init__(self, *args, **kwargs):
-        _params, kwargs = self._find_stat_params(kwargs)
-        self.params = deepcopy(self.DEFAULT_PARAMS)
-        self.params.update(_params)
+        self.params = copy_keys(kwargs, deepcopy(self.DEFAULT_PARAMS))
 
-        self._cache = {}
-        # Whatever arguments cannot be recognised as
-        # parameters, will be used to create a geom
-        self._cache['args'] = args
-        self._cache['kwargs'] = kwargs
+        self.aes_params = {ae: kwargs[ae]
+                           for ae in self.aesthetics() & kwargs.viewkeys()}
+
+        # Will be used to create the geom
+        self._cache = {'args': args, 'kwargs': kwargs}
 
     def __deepcopy__(self, memo):
         """
         Deep copy without copying the self.data dataframe
         """
-        # In case the object cannot be initialized with out
-        # arguments
-        class _empty(object):
-            pass
-        result = _empty()
-        result.__class__ = self.__class__
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
         for key, item in self.__dict__.items():
-            # don't make a deepcopy of data!
-            if key == "data":
+            if key == '_cache':
                 result.__dict__[key] = self.__dict__[key]
-                continue
-            result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+            else:
+                result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+
         return result
 
     @classmethod
-    def _calculate(cls, data, scales, **params):
-        msg = "{} should implement this method."
-        raise NotImplementedError(
-            msg.format(cls.__name__))
+    def aesthetics(cls):
+        """
+        Return a set of all non-computed aesthetics for this stat.
+        """
+        aesthetics = set()
+        for ae, value in six.iteritems(cls.DEFAULT_AES):
+            with suppress(AttributeError):
+                if value.startswith('..'):
+                    continue
+            aesthetics.add(ae)
+        return aesthetics
+
+    def use_defaults(self, data):
+        missing = (self.aesthetics() -
+                   self.aes_params.viewkeys() -
+                   set(data.columns))
+
+        for ae in missing:
+            if self.DEFAULT_AES[ae] is not None:
+                data[ae] = self.DEFAULT_AES[ae]
+
+        missing = (self.aes_params.viewkeys() -
+                   set(data.columns))
+
+        for ae in self.aes_params:
+            data[ae] = self.aes_params[ae]
+
+        return data
+
+    def setup_params(self, data):
+        """
+        Overide this to verify parameters
+        """
+        return self.params
+
+    def setup_data(self, data):
+        """
+        Overide to modify data before compute_layer is called
+        """
+        return data
 
     @classmethod
-    def _calculate_groups(cls, data, scales, **params):
+    def compute_layer(cls, data, params, panel):
+        check_required_aesthetics(
+            cls.REQUIRED_AES,
+            list(data.columns) + list(params.keys()),
+            cls.__name__)
+
+        def fn(pdata):
+            """
+            Helper compute function
+            """
+            # Given data belonging to a specific panel, grab
+            # the corresponding scales and call the method
+            # that does the real computation
+            pscales = panel.panel_scales(pdata['PANEL'].iat[0])
+            return cls.compute_panel(pdata, pscales, **params)
+
+        return groupby_apply(data, 'PANEL', fn)
+
+    @classmethod
+    def compute_panel(cls, data, scales, **params):
         """
         Calculate the stats of all the groups and
         return the results in a single dataframe.
@@ -89,7 +139,8 @@ class stat(object):
 
         stats = []
         for _, old in data.groupby('group'):
-            new = cls._calculate(old, scales, **params)
+            old.is_copy = None
+            new = cls.compute_group(old, scales, **params)
             unique = uniquecols(old)
             missing = unique.columns.difference(new.columns)
             u = unique.loc[[0]*len(new), missing].reset_index(drop=True)
@@ -110,57 +161,18 @@ class stat(object):
         # it completely.
         return stats
 
+    @classmethod
+    def compute_group(cls, data, scales, **params):
+        msg = "{} should implement this method."
+        raise NotImplementedError(
+            msg.format(cls.__name__))
+
     def __radd__(self, gg):
-        return gg + self._geom
-
-    @property
-    def _geom(self):
-        """
-        Create a geom
-
-        The geom is created once and stored in the cache.
-        The geom can only be created after the stat has
-        been initialized.
-        """
-        try:
-            _geom = self._cache['geom']
-        except KeyError:
-            # Create a geom and it to the ggplot object
-            geom = gg_import('geom_{}'.format(self.params['geom']))
-            _geom = geom(*self._cache['args'],
-                         stat=self.__class__.__name__[5:],
-                         position=self.params['position'],
-                         **self._cache['kwargs'])
-            # Allow the geom to know about the stat object
-            # Usefull in geom.__radd__ when creating layer
-            _geom._cache['stat'] = self
-            self._cache['geom'] = _geom
-        return _geom
-
-    def _find_stat_params(self, kwargs):
-        """
-        Identity and return the stat parameters.
-
-        The identified parameters are removed from kwargs
-
-        Parameters
-        ----------
-        kwargs : dict
-            keyword arguments passed to stat.__init__
-
-        Returns
-        -------
-        d : dict
-            stat parameters
-        kwargs : dict
-            rest of the kwargs
-        """
-        d = {}
-        for k in list(kwargs.keys()):
-            if (k in self.DEFAULT_PARAMS or
-                    k in self.REQUIRED_AES):
-                d[k] = kwargs.pop(k)
-        return d, kwargs
+        geom = gg_import('geom_{}'.format(self.params['geom']))
+        _geom = geom(*self._cache['args'],
+                     stat=self,
+                     **self._cache['kwargs'])
+        return gg + _geom
 
     def _verify_aesthetics(self, data):
         """

@@ -2,6 +2,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 import hashlib
 from itertools import islice
+from collections import OrderedDict
 
 from six import text_type
 from six.moves import zip, range
@@ -13,6 +14,7 @@ from matplotlib.offsetbox import (TextArea, HPacker, VPacker)
 from ..scales.scale import scale_continuous
 from ..utils import gg_import, ColoredDrawingArea, suppress
 from ..utils.exceptions import gg_warn, GgplotError
+from ..geoms import geom_text
 from .guide import guide
 
 # See guides.py for terminology
@@ -39,8 +41,17 @@ class guide_legend(guide):
 
         scale name is one of the aesthetics
         ['x', 'y', 'color', 'fill', 'size', 'shape', 'alpha']
+
+        Returns this guide if training is successful and None
+        if it fails
         """
         breaks = scale.scale_breaks(can_waive=False)
+        if isinstance(breaks, OrderedDict):
+            if all([np.isnan(x) for x in breaks.values()]):
+                return None
+        elif not len(breaks) or all(np.isnan(breaks)):
+            return None
+
         with suppress(AttributeError):
             breaks = list(breaks.keys())
 
@@ -71,6 +82,7 @@ class guide_legend(guide):
         info = '\n'.join([self.title, labels, str(self.direction),
                           self.__class__.__name__])
         self.hash = hashlib.md5(info.encode('utf-8')).hexdigest()
+        return self
 
     def merge(self, other):
         """
@@ -105,18 +117,16 @@ class guide_legend(guide):
         # guide entries may be ploted in the layers
         self.glayers = []
         for l in plot.layers:
-            all_ae = [ae for d in [l.mapping, plot.mapping,
-                                   l.stat.DEFAULT_AES]
-                      for ae in d]
-            geom_ae = [ae for d in [l.geom.REQUIRED_AES,
-                                    l.geom.DEFAULT_AES]
-                       for ae in d]
-            matched = set(all_ae) & set(geom_ae) & set(self.key.columns)
-            matched = matched - set(l.geom.manual_aes)
+            all_ae = (l.mapping.viewkeys() |
+                      plot.mapping if l.inherit_aes else set() |
+                      l.stat.DEFAULT_AES.viewkeys())
+            geom_ae = l.geom.REQUIRED_AES | l.geom.DEFAULT_AES.viewkeys()
+            matched = all_ae & geom_ae & set(self.key.columns)
+            matched = matched - set(l.geom.aes_params)
 
             if len(matched):
                 # This layer contributes to the legend
-                if l.show_guide is None or l.show_guide:
+                if l.show_legend is None or l.show_legend:
                     # Default is to include it
                     tmp = self.key[list(matched)].copy()
                     data = l.use_defaults(tmp)
@@ -124,7 +134,7 @@ class guide_legend(guide):
                     continue
             else:
                 # This layer does not contribute to the legend
-                if l.show_guide is None or not l.show_guide:
+                if l.show_legend is None or not l.show_legend:
                     continue
                 else:
                     zeros = [0] * len(self.key)
@@ -137,7 +147,7 @@ class guide_legend(guide):
             if hasattr(l.geom, 'draw_legend'):
                 geom = l.geom.__class__
             else:
-                geom = gg_import('geom_{}'.format(l.geom.guide_geom))
+                geom = gg_import('geom_{}'.format(l.geom.legend_geom))
             self.glayers.append(Bunch(geom=geom, data=data, layer=l))
 
         if not self.glayers:
@@ -186,35 +196,45 @@ class guide_legend(guide):
         Note the different height sizes for the entries
         """
         default_size = 20
-        pad = 14
-        if self.keywidth is None:
+        default_pad = 14
+
+        def determine_side_length():
             size = np.ones(nbreak) * default_size
             for i in range(nbreak):
                 for gl in self.glayers:
+                    pad = default_pad
+                    # special case, color does not apply to
+                    # border/linewidth
+                    if issubclass(gl.geom, geom_text):
+                        pad = 0
+                        if gl.data.ix[i, 'size'] < default_size:
+                            continue
+
                     try:
-                        size[i] = np.max([gl.data.ix[i, 'size'].max()+pad,
-                                          size[i]])
+                        # color(edgecolor) affects size(linewidth)
+                        # When the edge is not visible, we should
+                        # not expand the size of the keys
+                        if gl.data.ix[i, 'color'] is not None:
+                            size[i] = np.max([
+                                gl.data.ix[i, 'size'].max()+pad,
+                                size[i]])
                     except KeyError:
                         break
+            return size
 
+        if self.keywidth is None:
+            width = determine_side_length()
             if self.direction == 'vertical':
-                size[:] = size.max()
-            self._keywidth = size
+                width[:] = width.max()
+            self._keywidth = width
         else:
             self._keywidth = [self.keywidth]*nbreak
 
         if self.keyheight is None:
-            size = np.ones(nbreak) * default_size
-            for i in range(nbreak):
-                for gl in self.glayers:
-                    try:
-                        size[i] = np.max([gl.data.ix[i, 'size'].max()+pad,
-                                          size[i]])
-                    except KeyError:
-                        break
+            height = determine_side_length()
             if self.direction == 'horizontal':
-                size[:] = size.max()
-            self._keyheight = size
+                height[:] = height.max()
+            self._keyheight = height
         else:
             self._keyheight = [self.keyheight]*nbreak
 
@@ -235,14 +255,14 @@ class guide_legend(guide):
         reverse = slice(None, None, -1)
         nbreak = len(self.key)
         sep = 5  # gap between the legends
+        themeable = theme.figure._themeable
 
         # title
-        # TODO: theme me
         title_box = TextArea(
             self.title, textprops=dict(color='k', weight='bold'))
+        themeable['legend_title'] = title_box
 
         # labels
-        # TODO: theme me
         labels = []
         for item in self.key['label']:
             if isinstance(item, np.float) and np.float.is_integer(item):
@@ -250,9 +270,9 @@ class guide_legend(guide):
             va = 'center' if self.label_position == 'top' else 'baseline'
             ta = TextArea(item, textprops=dict(color='k', va=va))
             labels.append(ta)
+        themeable['legend_text'] = labels
 
         # Drawings
-        # TODO: theme me
         drawings = []
         for i in range(nbreak):
             da = ColoredDrawingArea(self._keywidth[i],
@@ -262,6 +282,7 @@ class guide_legend(guide):
             for gl in self.glayers:
                 da = gl.geom.draw_legend(gl.data.iloc[i], da, gl.layer)
             drawings.append(da)
+        themeable['legend_key'] = drawings
 
         # Match Drawings with labels to create the entries
         # TODO: theme me

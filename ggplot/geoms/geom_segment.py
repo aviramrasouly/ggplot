@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.collections as mcoll
 
 from .geom import geom
-from ..utils import make_rgba, make_line_segments
+from ..utils import to_rgba, make_line_segments
 
 
 class geom_segment(geom):
@@ -15,12 +15,11 @@ class geom_segment(geom):
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity',
                       'arrow': None, 'lineend': 'butt'}
 
-    guide_geom = 'path'
+    legend_geom = 'path'
 
     @staticmethod
-    def draw(pinfo, scales, coordinates, ax, **params):
-        pinfo['color'] = make_rgba(pinfo['color'],
-                                   pinfo['alpha'])
+    def draw_group(pinfo, panel_scales, coord, ax, **params):
+        pinfo['color'] = to_rgba(pinfo['color'], pinfo['alpha'])
         x = np.zeros(len(pinfo['x'])*2)
         y = np.zeros(len(pinfo['y'])*2)
 
@@ -46,4 +45,4 @@ class geom_segment(geom):
                     pinfo[param] = pinfo[param] * 2
 
             params['arrow'].draw(
-                pinfo, scales, coordinates, ax, constant=False)
+                pinfo, panel_scales, coord, ax, constant=False)

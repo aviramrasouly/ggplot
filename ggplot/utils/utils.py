@@ -8,26 +8,23 @@ import itertools
 import re
 import importlib
 import contextlib
+import inspect
 
+import six
 import numpy as np
 import pandas as pd
 import pandas.core.common as com
 import matplotlib as mpl
 import matplotlib.cbook as cbook
-from matplotlib.colors import ColorConverter
+from matplotlib.colors import colorConverter
 from matplotlib.offsetbox import DrawingArea
 from matplotlib.patches import Rectangle
-
-import six
 
 from .exceptions import GgplotError, gg_warn
 
 
-DISCRETE_DTYPES = {'category', np.dtype('O'), np.bool}
-CONTINUOUS_DTYPES = {np.number,
-                     np.dtype('int16'), np.dtype('float16'),
-                     np.dtype('int32'), np.dtype('float32'),
-                     np.dtype('int64'), np.dtype('float64')}
+DISCRETE_KINDS = 'Ob'
+CONTINUOUS_KINDS = 'if'
 
 # The x scale and y scale of a panel. Each may be None
 xy_panel_scales = collections.namedtuple('xy_panel_scales', 'x y')
@@ -175,7 +172,7 @@ def match(v1, v2, nomatch=-1, incomparables=None, start=0):
     """
     lookup = {}
     for i, x in enumerate(v2):
-        if not (x in lookup):
+        if x not in lookup:
             lookup[x] = i
 
     lst = [nomatch] * len(v1)
@@ -558,15 +555,15 @@ def seq(fromm=1, to=1, by=1, length_out=None):
     return x
 
 
-def hex_to_rgba(colors, alphas=1):
+def to_rgba(colors, alpha):
     """
     Covert hex colors to rgba values.
 
     Parameters
     ----------
-    colors : list-like | str
+    colors : iterable | str
         colors to convert
-    alphas : list-like | float
+    alphas : iterable | float
         alpha values
 
     Returns
@@ -582,53 +579,22 @@ def hex_to_rgba(colors, alphas=1):
     make plots with continuous alpha values innefficient.
     However :), the colors can be rgba list-likes and
     the alpha dimension will be respected.
-
-    see: `make_rgba`
     """
-    cc = ColorConverter()
-    if is_string(colors):
-        if len(colors):
-            out = cc.to_rgba(colors, alphas)
-        else:
-            out = colors
-    else:
-        out = cc.to_rgba_array(colors)
-        out[:, 3] = alphas
-    return out
-
-
-def make_rgba(colors, alpha):
-    """
-    Return RGBA color tuples.
-
-    Takes care of the parameters having different lengths
-    and also deals with None values. It is better to use
-    this function instead of calling `hex_to_rgba` directly.
-
-    see: `hex_to_rgba`
-    """
-    if not colors:
+    if colors is None:
         return colors
 
     def is_iterable(var):
         return cbook.iterable(var) and not is_string(var)
 
-    if is_iterable(colors) and is_iterable(alpha):
-        if len(colors) != len(alpha):
-            if len(alpha == 1):
-                alpha = alpha[0]
-            elif len(colors == 1):
-                colors = colors[0]
-            else:
-                raise GgplotError(
-                    "Cannot match the colors with the alpha values")
+    cc = colorConverter
+    if is_iterable(colors) and not is_iterable(alpha):
+        return cc.to_rgba_array(colors, alpha)
+    elif is_iterable(colors) and is_iterable(alpha):
+        return [cc.to_rgba(c, a) for c, a in zip(colors, alpha)]
     elif not is_iterable(colors) and is_iterable(alpha):
-        colors = make_iterable_ntimes(colors, len(alpha))
-
-    if any(c is None for c in colors):
-        return [c if c is None else hex_to_rgba(c) for c in colors]
-
-    return hex_to_rgba(colors, alpha)
+        return [cc.to_rgba(colors, a) for a in alpha]
+    else:  # not is_iterable(colors) and not is_iterable(alpha)
+        return cc.to_rgba(colors, alpha)
 
 
 def groupby_apply(df, cols, func, *args, **kwargs):
@@ -705,12 +671,13 @@ class ColoredDrawingArea(DrawingArea):
         super(ColoredDrawingArea, self).__init__(
             width, height, xdescent, ydescent)
 
-        self.add_artist(Rectangle((0, 0), width=width,
-                                  height=height,
-                                  facecolor=color,
-                                  edgecolor='None',
-                                  linewidth=0,
-                                  antialiased=False))
+        self.patch = Rectangle((0, 0), width=width,
+                               height=height,
+                               facecolor=color,
+                               edgecolor='None',
+                               linewidth=0,
+                               antialiased=False)
+        self.add_artist(self.patch)
 
     if mpl.__version__ <= '1.4.3':
         # We do not want to draw beyond the bounds.
@@ -749,3 +716,63 @@ def suppress(*exceptions):
         yield
     except exceptions:
         pass
+
+
+def copy_keys(source, destination, keys=None):
+    """
+    Add keys in source to destination
+
+    Parameters
+    ----------
+    source : dict
+
+    destination: dict
+
+    keys : None | iterable
+        The keys in source to be copied into destination. If
+        None, then `keys = destination.keys()`
+    """
+    if keys is None:
+        keys = destination.keys()
+    for k in set(source) & set(keys):
+        destination[k] = source[k]
+    return destination
+
+
+class RegisteredMeta(type):
+    """
+    Creates class that automatically registers all subclasses
+
+    The subclasses are held in the `registry` attribute of the
+    class. This is a `dict` of the form {name: class} and it
+    is accessed as `createdclass.registry`
+    """
+
+    def __init__(cls, name, bases, dct):
+        if not hasattr(cls, 'registry'):
+            cls.registry = {}
+        else:
+            cls.registry[name] = cls
+        super(RegisteredMeta, cls).__init__(name, bases, dct)
+
+
+def get_kwarg_names(func):
+    """
+    Return a list of valid kwargs to function func
+    """
+    kwarg_names = []
+    args, _, _, defaults = inspect.getargspec(func)
+    if defaults:
+        kwarg_names = args[:-len(defaults)]
+    return kwarg_names
+
+
+def get_valid_kwargs(func, potential_kwargs):
+    """
+    Return valid kwargs to function func
+    """
+    kwargs = {}
+    for name in get_kwarg_names(func):
+        with suppress(KeyError):
+            kwargs[name] = potential_kwargs[name]
+    return kwargs

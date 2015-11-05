@@ -12,6 +12,20 @@ import six
 from .exceptions import gg_warn, GgplotError
 
 
+class _ggplot_options(dict):
+
+    def __setitem__(self, key, val):
+        if key not in self:
+            raise GgplotError("Unknown option '{}'".format(key))
+        dict.__setitem__(self, key, val)
+
+
+ggplot_options = _ggplot_options(
+    # Development flag, e.g. set to True to prevent
+    # the queuing up of figures when errors happen.
+    close_all_figures=False)
+
+
 if not hasattr(mpl, 'rc_context'):
     from .utils import _rc_context
     mpl.rc_context = _rc_context
@@ -38,9 +52,7 @@ class gg_context(object):
         if self.theme:
             # Use a throw away rcParams, so subsequent plots
             # will not have any residual from this plot
-            rcParams = self.theme.get_rcParams()
-            for key in six.iterkeys(rcParams):
-                val = rcParams[key]
+            for key, val in six.iteritems(self.theme.rcParams):
                 # there is a bug in matplotlib which does not allow
                 # None directly
                 # https://github.com/matplotlib/matplotlib/issues/2543
@@ -51,7 +63,7 @@ class gg_context(object):
                 except Exception as e:
                     msg = ("""Setting "mpl.rcParams['{}']={}" """
                            "raised an Exception: {}")
-                    gg_warn(msg.format(key, val, e))
+                    raise GgplotError(msg.format(key, val, e))
         mpl.interactive(False)
 
     def __exit__(self, type, value, tb):

@@ -14,23 +14,23 @@ import re
 import datetime
 from types import FunctionType
 
+import six
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
-from matplotlib.ticker import MaxNLocator, ScalarFormatter
-import matplotlib.dates as dates
+from matplotlib.ticker import MaxNLocator, ScalarFormatter, Formatter
+from matplotlib.ticker import AutoMinorLocator
 from matplotlib.dates import MinuteLocator, HourLocator, DayLocator
 from matplotlib.dates import WeekdayLocator, MonthLocator, YearLocator
 from matplotlib.dates import AutoDateLocator
 from matplotlib.dates import DateFormatter
-import six
+from matplotlib.dates import date2num, num2date
+from matplotlib.colors import LinearSegmentedColormap, rgb2hex
+import palettable.colorbrewer as colorbrewer
 
+from ..utils import palettes
 from ..utils import seq, round_any, identity, is_waive, gg_import
-from ..utils.exceptions import GgplotError
-
-
-to_ordinalf = dates._to_ordinalf_np_vectorized
-from_ordinalf = dates._from_ordinalf_np_vectorized
+from ..utils.exceptions import GgplotError, gg_warn
 
 
 # formatting functions
@@ -125,6 +125,200 @@ def rescale_mid(x, to=(0, 1), from_=None, mid=0):
     return out
 
 
+def rescale_max(x, to=(0, 1), from_=None):
+    """
+    Rescale numeric vector to have specified maximum.
+
+    Parameters
+    ----------
+    x : ndarray | numeric
+        1D vector of values to manipulate.
+    to : tuple
+        output range (numeric vector of length two)
+    from_ : tuple
+        input range (numeric vector of length two).
+        If not given, is calculated from the range of x
+    """
+    array_like = True
+
+    try:
+        len(x)
+    except TypeError:
+        array_like = False
+        x = [x]
+
+    x = np.asarray(x)
+    if not from_:
+        from_ = np.array([np.min(x), np.max(x)])
+
+    out = x/from_[1] * to[1]
+
+    if not array_like:
+        out = out[0]
+    return out
+
+
+# Palette making utilities #
+
+def area_pal(range=(1, 6)):
+    """
+    Point area palette (continuous).
+
+    Parameters
+    ----------
+    range : tuple
+        Numeric vector of length two, giving range of possible sizes.
+        Should be greater than 0.
+    """
+    def area_palette(x):
+        return rescale(np.sqrt(x), range, (0, 1))
+    return area_palette
+
+
+def grey_pal(start=0.2, end=0.8):
+    """
+    Utility for creating discrete grey scale palette
+    """
+    gamma = 2.2
+    ends = ((0.0, start, start), (1.0, end, end))
+    cdict = {'red': ends, 'green': ends, 'blue': ends}
+    grey_cmap = LinearSegmentedColormap('grey', cdict)
+
+    def func(n):
+        colors = []
+        # The grey scale points are linearly separated in
+        # gamma encoded space
+        for x in np.linspace(start**gamma, end**gamma, n):
+            # Map points onto the [0, 1] palette domain
+            x = (x ** (1./gamma) - start) / (end - start)
+            colors.append(rgb2hex(grey_cmap(x)))
+        return colors
+    return func
+
+
+def hue_pal(h=.01, l=.6, s=.65, color_space='hls'):
+    """
+    Utility for making hue palettes for color schemes.
+    """
+    if not all([0 <= val <= 1 for val in (h, l, s)]):
+        msg = ("hue_pal expects values to be between 0 and 1. "
+               " I got h={}, l={}, s={}".format(h, l, s))
+        raise GgplotError(msg)
+
+    if color_space not in ('hls', 'husl'):
+        msg = "color_space should be one of ['hls', 'husl']"
+        raise GgplotError(msg)
+
+    palette = getattr(palettes, '{}_palette'.format(color_space))
+
+    def func(n):
+        colors = palette(n, h=h, l=l, s=s)
+        return [rgb2hex(c) for c in colors]
+    return func
+
+
+def brewer_pal(type='seq', palette=1):
+    """
+    Utility for making a brewer palette
+    """
+    def _handle_shorthand(text):
+        abbrevs = {
+            "seq": "Sequential",
+            "qual": "Qualitative",
+            "div": "Diverging"
+        }
+        text = abbrevs.get(text, text)
+        return text.title()
+
+    def _number_to_palette(ctype, n):
+        n -= 1
+        palettes = sorted(colorbrewer.COLOR_MAPS[ctype].keys())
+        if n < len(palettes):
+            return palettes[n]
+
+    def _max_palette_colors(type, palette_name):
+        """
+        Return the number of colors in the brewer palette
+        """
+        if type == 'Sequential':
+            return 9
+        elif type == 'Diverging':
+            return 11
+        else:
+            # Qualitative palettes have different limits
+            qlimit = {"Accent": 8, "Dark": 8, "Paired": 12,
+                      "Pastel1": 9, "Pastel2": 8, "Set1": 9,
+                      "Set2": 8, "Set3": 12}
+            return qlimit[palette_name]
+
+    type = _handle_shorthand(type)
+    if isinstance(palette, int):
+        palette_name = _number_to_palette(type, palette)
+    else:
+        palette_name = palette
+    nmax = _max_palette_colors(type, palette_name)
+
+    def func(n):
+        # Only draw the maximum allowable colors from the palette
+        # and fill any remaining spots with None
+        _n = n if n <= nmax else nmax
+        bmap = colorbrewer.get_map(palette_name, type, _n)
+        hex_colors = bmap.hex_colors
+        if n > nmax:
+            msg = ("Warning message:"
+                   "Brewer palette {} has a maximum of {} colors"
+                   "Returning the palette you asked for with"
+                   "that many colors")
+            gg_warn(msg.format(palette_name, nmax))
+            hex_colors = hex_colors + [None] * (n - nmax)
+        return hex_colors
+    return func
+
+
+def gradient_n_pal(colors, values=None, name='gradientn'):
+    # Note: For better results across devices and media types,
+    # it would be better to do the interpolation in
+    # Lab color space.
+    if values is None:
+        colormap = LinearSegmentedColormap.from_list(
+            name, colors)
+    else:
+        colormap = LinearSegmentedColormap.from_list(
+            name, list(zip(values, colors)))
+
+    def func(vals):
+
+        """
+        Return colors along a colormap
+
+        Parameters
+        ----------
+        values : array_like | float
+            Numeric(s) in the range (0, 1)
+        """
+        color_tuples = colormap(vals)
+        try:
+            rgb_colors = [rgb2hex(t) for t in color_tuples]
+        except IndexError:
+            rgb_colors = rgb2hex(color_tuples)
+        return rgb_colors
+    return func
+
+
+def abs_area(max):
+    """
+    Point area palette (continuous), with area proportional to value.
+
+    Parameters
+    ----------
+    max : float
+        A number representing the maximum size
+    """
+    def abs_area_palette(x):
+        return rescale(np.sqrt(np.abs(x)), (0, max), (0, 1))
+    return abs_area_palette
+
+
 def censor(x, range=(0, 1), only_finite=True):
     """
     Convert any values outside of range to np.NaN
@@ -149,7 +343,8 @@ def censor(x, range=(0, 1), only_finite=True):
         intype = type(x)
         x = np.array(x)
 
-    if 'datetime64' not in str(x.dtype):
+    # Not datetime or timedelta
+    if x.dtype.kind not in 'Mm':
         if only_finite:
             finite = np.isfinite(x)
         else:
@@ -188,7 +383,11 @@ def zero_range(x, tol=np.finfo(float).eps * 100):
         raise GgplotError('x must be length 1 or 2')
 
     if isinstance(x[0], (pd.Timestamp, datetime.datetime)):
-        x = to_ordinalf(x)
+        x = date2num(x)
+    elif isinstance(x[0], pd.Timedelta):
+        # series preserves the timedelta,
+        # then we want them as ints
+        x = pd.Series(x).astype(np.int)
 
     if any(np.isnan(x)):
         return np.nan
@@ -232,8 +431,11 @@ def expand_range(range, mul=0, add=0, zero_width=1):
         range = (range, range)
 
     timestamp = isinstance(range[0], pd.Timestamp)
+    timedelta = isinstance(range[0], pd.Timedelta)
     if timestamp:
-        range = to_ordinalf(range)
+        range = date2num(range)
+    elif timedelta:
+        range = pd.Series(range).astype(np.int)
 
     # The expansion cases
     if zero_range(range):
@@ -245,7 +447,10 @@ def expand_range(range, mul=0, add=0, zero_width=1):
         erange = tuple(erange)
 
     if timestamp:
-        erange = tuple(from_ordinalf(erange))
+        erange = tuple(num2date(erange))
+    elif timedelta:
+        erange = (pd.Timedelta(int(erange[0])),
+                  pd.Timedelta(int(erange[1])))
     return erange
 
 
@@ -383,6 +588,34 @@ def date_format(format='%Y-%m-%d'):
     return make_formatter
 
 
+class TimedeltaFormatter(Formatter):
+    def __call__(self, x, pos=0):
+        return str(pd.Timedelta(x))
+
+
+class defaultLocator(MaxNLocator):
+    trans_name = ''
+
+    def __init__(self, nbins=7, steps=(1, 2, 5, 10)):
+        MaxNLocator.__init__(self, nbins=nbins, steps=steps)
+
+
+class DateLocator(AutoDateLocator):
+    trans_name = ''
+
+    def __init__(self):
+        AutoDateLocator.__init__(self, minticks=5, interval_multiples=True)
+        from matplotlib.dates import YEARLY
+        self.intervald[YEARLY] = [5, 50]
+
+
+class defaultMinorLocator(AutoMinorLocator):
+    trans_name = ''
+
+    def __init__(self):
+        AutoMinorLocator.__init__(self, n=2)
+
+
 # Transforms #
 
 # To create the effect where by the scales are labelled in
@@ -391,13 +624,9 @@ def date_format(format='%Y-%m-%d'):
 # (ScalarFormatter). The Locator calculates ticks in data space
 # and returns them in transformed space and the Formatter
 # returns a label based on data space.
-
 def make_locator(transform, inverse):
-    class transformLocator(MaxNLocator):
+    class transformLocator(defaultLocator):
         trans_name = ''
-
-        def __init__(self, nbins=8, steps=(1, 2, 5, 10)):
-            MaxNLocator.__init__(self, nbins=nbins, steps=steps)
 
         def __call__(self):
             # Transformed space
@@ -433,9 +662,54 @@ def make_locator(transform, inverse):
     return transformLocator
 
 
+def make_minor_locator(transform, inverse):
+    class transformMinorLocator(defaultMinorLocator):
+        trans_name = ''
+
+        def __call__(self):
+            'Return the locations of the ticks'
+            majorlocs = self.axis.get_majorticklocs()
+            majorlocs = [inverse(l) for l in majorlocs]
+
+            try:
+                majorstep = majorlocs[1] - majorlocs[0]
+            except IndexError:
+                majorstep = 0
+
+            ndivs = self.ndivs
+            minorstep = majorstep / ndivs
+            vmin, vmax = self.axis.get_view_interval()
+
+            # To original data space
+            vmin, vmax = inverse(vmin), inverse(vmax)
+
+            # Calculate locations
+            if vmin > vmax:
+                vmin, vmax = vmax, vmin
+
+            if len(majorlocs) > 0:
+                t0 = majorlocs[0]
+                tmin = ((vmin - t0) // minorstep + 1) * minorstep
+                tmax = ((vmax - t0) // minorstep + 1) * minorstep
+                locs = np.arange(tmin, tmax, minorstep) + t0
+                cond = np.abs((locs - t0) % majorstep) > minorstep / 10.0
+                locs = locs.compress(cond)
+            else:
+                locs = []
+
+            # Back to transformed space
+            locs = [transform(l) for l in locs]
+            return self.raise_if_exceeds(np.array(locs))
+
+    return transformMinorLocator
+
+
 # how to label(format) the break strings
 def make_formatter(inverse):
     class transformFormatter(ScalarFormatter):
+
+        def __init__(self):
+            ScalarFormatter.__init__(self, useOffset=False)
 
         def __call__(self, x, pos=None):
             # Original data space
@@ -479,12 +753,8 @@ def trans_new(name, transform, inverse,
     """
     trans_name = str('{}_trans'.format(name))
 
-    # FIXME: look into minor ticks
     class klass(object):
-        __name__ = trans_name
         aesthetic = None
-        trans = staticmethod(transform)
-        inv = staticmethod(inverse)
 
         def modify_axis(self, ax):
             """
@@ -492,31 +762,32 @@ def trans_new(name, transform, inverse,
 
             Set the locator and formatter
             """
-            if self.name == 'identity':
-                return
-
             if self.aesthetic not in ('x', 'y'):
                 return
 
             # xaxis or yaxis
             axis = '{}axis'.format(self.aesthetic)
+            obj = getattr(ax, axis)
+            if not is_waive(self.breaks_locator):
+                obj.set_major_locator(self.breaks_locator())
 
-            if not is_waive(self.locator_factory):
-                obj = getattr(ax, axis)
-                obj.set_major_locator(self.locator_factory())
+            if not is_waive(self.minor_breaks_locator):
+                obj.set_minor_locator(self.minor_breaks_locator())
 
-            if not is_waive(self.formatter_factory):
-                obj = getattr(ax, axis)
-                obj.set_major_formatter(self.formatter_factory())
+            if not is_waive(self.labels_formatter):
+                obj.set_major_formatter(self.labels_formatter())
 
+    klass.__name__ = trans_name
     klass.name = name
+    klass.transform = staticmethod(transform)
+    klass.inverse = staticmethod(inverse)
     # Each axis requires a separate locator(MPL requirement),
     # and for consistency we used separate formatters too.
-    klass.locator_factory = make_locator(transform, inverse)
-    klass.locator_factory.trans_name = trans_name
-    klass.formatter_factory = make_formatter(inverse)
-    klass.breaks = klass.locator_factory          # to match ggplot2
-    klass.format = klass.formatter_factory        # to match ggplot2
+    klass.breaks_locator = make_locator(transform, inverse)
+    klass.breaks_locator.trans_name = trans_name
+    klass.labels_formatter = make_formatter(inverse)
+    klass.minor_breaks_locator = make_minor_locator(transform, inverse)
+    klass.minor_breaks_locator.trans_name = trans_name
     return klass
 
 
@@ -525,13 +796,13 @@ def log_trans(base=None):
     if base is None:
         name = 'log'
         base = np.exp(1)
-        trans = np.log
+        transform = np.log
     elif base == 10:
         name = 'log10'
-        trans = np.log10
+        transform = np.log10
     elif base == 2:
         name = 'log2'
-        trans = np.log2
+        transform = np.log2
     else:
         name = 'log{}'.format(base)
 
@@ -539,9 +810,9 @@ def log_trans(base=None):
             return np.log(x)/np.log(base)
 
     # inverse function
-    def inv(x):
+    def inverse(x):
         return x ** base
-    return trans_new(name, trans, inv)
+    return trans_new(name, transform, inverse)
 
 
 def exp_trans(base=None):
@@ -553,14 +824,14 @@ def exp_trans(base=None):
         name = 'power-{}'.format(base)
 
     # transform function
-    def trans(x):
+    def transform(x):
         return base ** x
 
     # inverse function
-    def inv(x):
+    def inverse(x):
         return np.log(x)/np.log(base)
 
-    return trans_new(name, trans, inv)
+    return trans_new(name, transform, inverse)
 
 log10_trans = log_trans(10)
 log2_trans = log_trans(2)
@@ -576,15 +847,15 @@ atanh_trans = trans_new('atanh', np.arctanh, np.tanh)
 
 def boxcox_trans(p):
     if np.abs(p) < 1e-7:
-        return log_trans
+        return log_trans()
 
-    def trans(x):
+    def transform(x):
         return (x**p - 1) / (p * np.sign(x-1))
 
-    def inv(x):
+    def inverse(x):
         return (np.abs(x) * p + np.sign(x)) ** (1 / p)
 
-    return trans_new('pow-{}'.format(p), trans, inv)
+    return trans_new('pow-{}'.format(p), transform, inverse)
 
 
 # Probability transforms
@@ -594,34 +865,58 @@ def probability_trans(distribution, *args, **kwargs):
         msg = "Unknown distribution '{}'"
         raise GgplotError(msg.format(distribution))
 
-    def trans(x):
+    def transform(x):
         return getattr(stats, distribution).cdf(x, *args, **kwargs)
 
-    def inv(x):
+    def inverse(x):
         return getattr(stats, distribution).ppf(x, *args, **kwargs)
 
-    return trans_new('prob-{}'.format(distribution), trans, inv)
+    return trans_new('prob-{}'.format(distribution), transform, inverse)
 
 
 def datetime_trans():
-    def trans(x):
+    def transform(x):
         try:
-            x = to_ordinalf(x)
+            x = date2num(x)
         except AttributeError:
             # numpy datetime64
             x = [pd.Timestamp(item) for item in x]
-            x = to_ordinalf(x)
+            x = date2num(x)
         return x
 
-    def inv(x):
-        return from_ordinalf(x)
+    def inverse(x):
+        return num2date(x)
 
     def _DateFormatter():
         return DateFormatter('%Y-%m-%d')
 
-    _trans = trans_new('datetime', trans, inv)
-    _trans.locator_factory = staticmethod(AutoDateLocator)
-    _trans.formatter_factory = staticmethod(_DateFormatter)
+    _trans = trans_new('datetime', transform, inverse)
+    _trans.breaks_locator = staticmethod(DateLocator)
+    _trans.minor_breaks_locator = staticmethod(defaultMinorLocator)
+    _trans.labels_formatter = staticmethod(_DateFormatter)
+    return _trans
+
+
+def timedelta_trans():
+    def transform(x):
+        try:
+            iter(x)
+            x = pd.Series(x).astype(np.int)
+        except TypeError:
+            x = np.int(x)
+        return x
+
+    def inverse(x):
+        try:
+            x = [pd.Timedelta(int(i)) for i in x]
+        except TypeError:
+            x = pd.Timedelta(int(x))
+        return x
+
+    _trans = trans_new('timedelta', transform, inverse)
+    _trans.breaks_locator = staticmethod(defaultLocator)
+    _trans.minor_breaks_locator = staticmethod(defaultMinorLocator)
+    _trans.labels_formatter = staticmethod(TimedeltaFormatter)
     return _trans
 
 

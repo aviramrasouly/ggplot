@@ -12,12 +12,11 @@ from patsy.eval import EvalEnvironment
 
 from ..scales.scales import scales_add_defaults
 from ..utils.exceptions import GgplotError
-from ..utils import DISCRETE_DTYPES, ninteraction
+from ..utils import DISCRETE_KINDS, ninteraction
 from ..utils import check_required_aesthetics, defaults
-from ..utils import is_string, gg_import, groupby_apply
-from ..utils import is_scalar_or_string, suppress
-from ..positions.position import _position_base
-from .aes import aes, is_calculated_aes, strip_dots, aesdefaults
+from ..utils import is_string, gg_import, suppress
+from ..positions.position import position
+from .aes import aes, is_calculated_aes, strip_dots
 
 _TPL_EVAL_FAIL = """\
 Could not evaluate the '{}' mapping: '{}' \
@@ -29,47 +28,73 @@ but only single items and lists/arrays can be used. \
 (original error: {})"""
 
 
+class Layers(list):
+    """
+    List of layers
+
+    Each layer knows its position/zorder (1 based) in the list.
+    """
+
+    def append(self, item):
+        item.zorder = len(self) + 1
+        return list.append(self, item)
+
+    def _set_zorder(self, lst2):
+        base = len(self)
+        for i, item in enumerate(lst2):
+            item.zorder = base + 1
+        return lst2
+
+    def extend(self, other):
+        other = self._set_zorder(other)
+        return list.extend(self, other)
+
+    def __iadd__(self, other):
+        other = self._set_zorder(other)
+        return list.__iadd__(self, other)
+
+    def __add__(self, other):
+        other = self._set_zorder(other)
+        return list.__add__(self, other)
+
+
 class layer(object):
 
     def __init__(self, geom=None, stat=None,
                  data=None, mapping=None,
-                 position=None, params=None,
-                 inherit_aes=True, group=None,
-                 show_guide=None):
+                 position=None, inherit_aes=True,
+                 show_legend=None):
         self.geom = geom
         self.stat = stat
         self.data = data
         self.mapping = mapping
         self.position = self._position_object(position)
-        self.params = params
         self.inherit_aes = inherit_aes
-        self.group = group
-        self.show_guide = show_guide
+        self.show_legend = show_legend
         self._active_mapping = {}
+        self.zorder = 0
 
     def __deepcopy__(self, memo):
         """
         Deep copy without copying the self.data dataframe
         """
-        # In case the object cannot be initialized with out
-        # arguments
-        class _empty(object):
-            pass
-        result = _empty()
-        result.__class__ = self.__class__
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
         for key, item in self.__dict__.items():
-            # don't make a deepcopy of data!
-            if key == "data":
+            if key == 'data':
                 result.__dict__[key] = self.__dict__[key]
-                continue
-            result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+            else:
+                result.__dict__[key] = deepcopy(self.__dict__[key], memo)
+
         return result
 
     def _position_object(self, name):
         """
         Return an instantiated position object
         """
-        if issubclass(type(name), _position_base):
+        if issubclass(type(name), position):
             return name
 
         if not is_string(name):
@@ -103,11 +128,11 @@ class layer(object):
         else:
             aesthetics = self.mapping
 
-        # drop aesthetics that are manual or calculated
-        manual = set(self.geom.manual_aes.keys())
+        # drop aesthetic parameters or the calculated aesthetics
         calculated = set(is_calculated_aes(aesthetics))
         d = dict((ae, v) for ae, v in aesthetics.items()
-                 if not (ae in manual) and not (ae in calculated))
+                 if (ae not in self.geom.aes_params) and
+                 (ae not in calculated))
         self._active_mapping = aes(**d)
         return self._active_mapping
 
@@ -122,14 +147,14 @@ class layer(object):
         aesthetics = self.layer_mapping(plot.mapping)
 
         # Override grouping if set in layer.
-        if self.group is not None:
-            aesthetics['group'] = self.group
+        with suppress(KeyError):
+            aesthetics['group'] = self.geom.aes_params['group']
 
         env = EvalEnvironment.capture(eval_env=plot.plot_env)
         env = env.with_outer_namespace({'factor': pd.Categorical})
 
         evaled = pd.DataFrame(index=data.index)
-        settings = False  # Indicate manual settings within aes()
+        has_aes_params = False  # aesthetic parameter in aes()
 
         # If a column name is not in the data, it is evaluated/transformed
         # in the environment of the call to ggplot
@@ -158,7 +183,7 @@ class layer(object):
                         "or the same length as the data")
                 elif n == 1:
                     col = col[0]
-                settings = True
+                has_aes_params = True
                 evaled[ae] = col
             elif not cbook.iterable(col) and cbook.is_numlike(col):
                 evaled[ae] = col
@@ -177,32 +202,30 @@ class layer(object):
         evaled_aes = aes(**dict((col, col) for col in evaled))
         scales_add_defaults(plot.scales, evaled, evaled_aes)
 
-        if len(data) == 0 and settings:
+        if len(data) == 0 and has_aes_params:
             # No data, and vectors suppled to aesthetics
             evaled['PANEL'] = 1
         else:
             evaled['PANEL'] = data['PANEL']
 
+        evaled = add_group(evaled)
         return evaled
 
-    def calc_statistic(self, data, scales):
+    def compute_statistic(self, data, panel):
         """
-        Verify required aethetics and return the
-        statistics as computed by the stat object
+        Compute & return statistics for this layer
         """
         if not len(data):
             return pd.DataFrame()
 
-        check_required_aesthetics(
-            self.stat.REQUIRED_AES,
-            list(data.columns) + list(self.stat.params.keys()),
-            self.stat.__class__.__name__)
-
-        return self.stat._calculate_groups(data, scales,
-                                           **self.stat.params)
+        params = self.stat.setup_params(data)
+        data = self.stat.use_defaults(data)
+        data = self.stat.setup_data(data)
+        return self.stat.compute_layer(data, params, panel)
 
     def map_statistic(self, data, plot):
         """
+        Mapping aesthetics to computed statistics
         """
         if len(data) == 0:
             return pd.DataFrame()
@@ -242,95 +265,66 @@ class layer(object):
         data = pd.concat([data, stat_data], axis=1)
         return data
 
-    def reparameterise(self, data):
+    def setup_data(self, data):
+        """
+        Prepare/modify data for plotting
+        """
         if len(data) == 0:
             return pd.DataFrame()
-        return self.geom.reparameterise(data)
 
-    def adjust_position(self, data):
-        """
-        Adjust the position of each geometric object
-        in concert with the other objects in the panel
-        """
-        data = groupby_apply(data, 'PANEL', self.position.adjust)
+        data = self.geom.setup_data(data)
+
+        check_required_aesthetics(
+            self.geom.REQUIRED_AES,
+            set(data.columns) | set(self.geom.aes_params),
+            self.geom.__class__.__name__)
         return data
 
-    def draw(self, data, scales, coordinates, ax, zorder):
+    def compute_position(self, data, panel):
         """
-        Draw layer
+        Compute the position of each geometric object
+        in concert with the other objects in the panel
+        """
+        params = self.position.setup_params(data)
+        data = self.position.setup_data(data, params)
+        return self.position.compute_layer(data, params, panel)
+
+    def draw(self, data, panel, coord):
+        """
+        Draw geom
 
         Parameters
         ----------
         data : DataFrame
             DataFrame specific for this layer
-        scales : dict
-            Has two keys, 'x' and 'y' whose values
-            are the x and y scales respectively
-        coordinates : coord
+        panel : Panel
+            Panel object created when the plot is getting
+            built
+        coord : coord
             Type of coordinate axes
-        ax : axes
-            On which to draw the layer
-        zorder : int
-            Stacking order of the layer in the plot
         """
-        check_required_aesthetics(
-            self.geom.REQUIRED_AES,
-            set(data.columns) | set(self.geom.manual_aes),
-            self.geom.__class__.__name__)
-
-        params = deepcopy(self.geom.params)
-        params.update(self.stat.params)
-        params['zorder'] = zorder
-        self.geom.draw_groups(data, scales, coordinates, ax, **params)
+        self.geom.draw_layer(data, panel, coord, self.zorder)
 
     def use_defaults(self, data):
         """
-        Return dataframe with aesthetic parameter setting and
-        default aesthetic values. i.e. Unmapped aesthetics
-        and their values
+        Prepare/modify data for plotting
         """
-        df = aesdefaults(data, self.geom.DEFAULT_AES, None)
+        return self.geom.use_defaults(data)
 
-        # Override mappings with atomic parameters
-        gp = ((set(df.columns) | set(self.geom.REQUIRED_AES)) &
-              set(self.geom.manual_aes))
-        for ae in self.geom.manual_aes:
-            if not is_scalar_or_string(self.geom.manual_aes[ae]):
-                with suppress(KeyError):
-                    gp.remove(ae)
 
-        gp = list(gp)
-
-        # Check that mappings are compatable length: either 1 or
-        # the same length
-        def llen(var):
-            if is_scalar_or_string(var):
-                return 1
-            return len(var)
-
-        param_lengths = np.array(
-            [llen(self.geom.manual_aes[ae]) for ae in gp])
-
-        bad = (param_lengths != 1) & (param_lengths != len(df))
-        if any(bad):
-            msg = "Incompatible lengths for set aesthetics: {}"
-            raise GgplotError(msg.format(', '.join(df[bad].columns)))
-
-        for ae in gp:
-            df[ae] = self.geom.manual_aes[ae]
-
-        return df
+NO_GROUP = -1
 
 
 def add_group(data):
     if len(data) == 0:
         return data
-    if not ('group' in data):
+
+    if 'group' not in data:
         disc = discrete_columns(data, ignore=['label'])
         if disc:
             data['group'] = ninteraction(data[disc], drop=True)
         else:
-            data['group'] = 1
+            data['group'] = NO_GROUP
     else:
         data['group'] = ninteraction(data[['group']], drop=True)
 
@@ -345,6 +339,6 @@ def discrete_columns(df, ignore):
     """
     lst = []
     for col in df:
-        if (df[col].dtype in DISCRETE_DTYPES) and not (col in ignore):
+        if (df[col].dtype.kind in DISCRETE_KINDS) and (col not in ignore):
             lst.append(col)
     return lst

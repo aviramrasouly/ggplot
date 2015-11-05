@@ -23,7 +23,7 @@ def get_package_data():
         'ggplot':
         baseline_images +
         [
-            "exampledata/*.csv",
+            "data/*.csv",
             "geoms/*.png"
         ]}
 
@@ -46,7 +46,7 @@ setup(
     # "python setup.py install"
     install_requires=["six",
                       "statsmodels >= 0.6",
-                      "brewer2mpl",
+                      "palettable",
                       "matplotlib >= 1.4.0",
                       "scipy",
                       "patsy >= 0.4.0",
