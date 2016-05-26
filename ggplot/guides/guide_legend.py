@@ -5,7 +5,6 @@ from itertools import islice
 from collections import OrderedDict
 
 import six
-from six import text_type
 from six.moves import zip, range
 import numpy as np
 import pandas as pd
@@ -46,7 +45,7 @@ class guide_legend(guide):
         Returns this guide if training is successful and None
         if it fails
         """
-        breaks = scale.scale_breaks(can_waive=False)
+        breaks = scale.get_breaks()
         if isinstance(breaks, OrderedDict):
             if all([np.isnan(x) for x in breaks.values()]):
                 return None
@@ -58,7 +57,7 @@ class guide_legend(guide):
 
         key = pd.DataFrame({
             scale.aesthetics[0]: scale.map(breaks),
-            'label': scale.scale_labels(breaks, can_waive=False)})
+            'label': scale.get_labels(breaks)})
 
         # Drop out-of-range values for continuous scale
         # (should use scale$oob?)
@@ -79,7 +78,7 @@ class guide_legend(guide):
         self.key = key
 
         # create a hash of the important information in the guide
-        labels = ' '.join(text_type(x) for x in self.key['label'])
+        labels = ' '.join(six.text_type(x) for x in self.key['label'])
         info = '\n'.join([self.title, labels, str(self.direction),
                           self.__class__.__name__])
         self.hash = hashlib.md5(info.encode('utf-8')).hexdigest()
@@ -203,24 +202,31 @@ class guide_legend(guide):
             size = np.ones(nbreak) * default_size
             for i in range(nbreak):
                 for gl in self.glayers:
+                    _size = 0
                     pad = default_pad
+                    # Full size of object to appear in the
+                    # legend key
+                    if 'size' in gl.data:
+                        _size = gl.data.iloc[i]['size']
+                        if 'stroke' in gl.data:
+                            _size += 2*gl.data.iloc[i]['stroke']
+
                     # special case, color does not apply to
                     # border/linewidth
                     if issubclass(gl.geom, geom_text):
                         pad = 0
-                        if gl.data.ix[i, 'size'] < default_size:
+                        if _size < default_size:
                             continue
 
                     try:
                         # color(edgecolor) affects size(linewidth)
                         # When the edge is not visible, we should
                         # not expand the size of the keys
-                        if gl.data.ix[i, 'color'] is not None:
-                            size[i] = np.max([
-                                gl.data.ix[i, 'size'].max()+pad,
-                                size[i]])
+                        if gl.data.iloc[i]['color'] is not None:
+                            size[i] = np.max([_size+pad, size[i]])
                     except KeyError:
                         break
+
             return size
 
         if self.keywidth is None:
@@ -281,7 +287,9 @@ class guide_legend(guide):
                                     0, 0, color='#E5E5E5')
             # overlay geoms
             for gl in self.glayers:
-                da = gl.geom.draw_legend(gl.data.iloc[i], da, gl.layer)
+                data = gl.data.iloc[i]
+                data.is_copy = None
+                da = gl.geom.draw_legend(data, da, gl.layer)
             drawings.append(da)
         themeable['legend_key'] = drawings
 

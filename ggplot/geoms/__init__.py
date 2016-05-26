@@ -11,6 +11,7 @@ from .geom_density import geom_density
 from .geom_dotplot import geom_dotplot
 from .geom_errorbar import geom_errorbar
 from .geom_errorbarh import geom_errorbarh
+from .geom_freqpoly import geom_freqpoly
 from .geom_histogram import geom_histogram
 from .geom_hline import geom_hline
 from .geom_jitter import geom_jitter
@@ -25,6 +26,7 @@ from .geom_polygon import geom_polygon
 from .geom_quantile import geom_quantile
 from .geom_rect import geom_rect
 from .geom_ribbon import geom_ribbon
+from .geom_rug import geom_rug
 from .geom_segment import geom_segment
 from .geom_smooth import geom_smooth
 from .geom_spoke import geom_spoke
@@ -42,13 +44,13 @@ from .annotate import annotate
 __all__ = ['geom_abline', 'geom_area', 'geom_bar',
            'geom_blank', 'geom_boxplot', 'geom_crossbar',
            'geom_density', 'geom_dotplot', 'geom_errorbar',
-           'geom_errorbarh', 'geom_histogram', 'geom_hline',
-           'geom_jitter', 'geom_label', 'geom_line',
+           'geom_errorbarh', 'geom_freqpoly', 'geom_histogram',
+           'geom_hline', 'geom_jitter', 'geom_label', 'geom_line',
            'geom_linerange', 'geom_now_its_art', 'geom_path',
            'geom_point', 'geom_pointrange', 'geom_pointrange',
            'geom_quantile', 'geom_polygon', 'geom_rect',
-           'geom_ribbon', 'geom_segment', 'geom_smooth',
-           'geom_spoke', 'geom_step', 'geom_text', 'geom_tile',
-           'geom_violin', 'geom_vline',
+           'geom_ribbon', 'geom_rug', 'geom_segment',
+           'geom_smooth', 'geom_spoke', 'geom_step', 'geom_text',
+           'geom_tile', 'geom_violin', 'geom_vline',
            # other
            'arrow', 'annotate']

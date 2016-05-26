@@ -33,7 +33,8 @@ class stat(object):
         self.params = copy_keys(kwargs, deepcopy(self.DEFAULT_PARAMS))
 
         self.aes_params = {ae: kwargs[ae]
-                           for ae in self.aesthetics() & six.viewkeys(kwargs)}
+                           for ae in (self.aesthetics() &
+                                      six.viewkeys(kwargs))}
 
         # Will be used to create the geom
         self._cache = {'args': args, 'kwargs': kwargs}

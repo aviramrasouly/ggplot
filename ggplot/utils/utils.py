@@ -357,6 +357,41 @@ def _id_var(x, drop=False):
     return lst
 
 
+def join_keys(x, y, by=None):
+    """
+    Join keys.
+
+    Given two data frames, create a unique key for each row.
+
+    Parameters
+    -----------
+    x : dataframe
+    y : dataframe
+    by : list-like
+        Column names to join by
+
+    Returns
+    -------
+    out : dict
+        Dictionary with keys x and y. The values of both keys
+        are arrays with integer elements. Identical rows in
+        x and y dataframes would have the same key in the
+        output. The key elements start at 1.
+    """
+    if by is None:
+        by = slice(None, None, None)
+
+    if isinstance(by, tuple):
+        by = list(by)
+
+    joint = x[by].append(y[by], ignore_index=True)
+    keys = ninteraction(joint, drop=True)
+    keys = np.asarray(keys)
+    nx, ny = len(x), len(y)
+    return {'x': keys[np.arange(nx)],
+            'y': keys[nx + np.arange(ny)]}
+
+
 def check_required_aesthetics(required, present, name):
     missing_aes = set(required) - set(present)
 
@@ -504,17 +539,17 @@ def remove_missing(df, na_rm=False, vars=None, name='', finite=False):
 
     if finite:
         lst = [np.inf, -np.inf]
-        to_replace = dict((v, lst) for v in vars)
+        to_replace = {v: lst for v in vars}
         df.replace(to_replace, np.nan, inplace=True)
         txt = 'non-finite'
     else:
         txt = 'missing'
 
-    df.dropna(inplace=True)
+    df = df.dropna()
     df.reset_index(drop=True, inplace=True)
     if len(df) < n and not na_rm:
         msg = '{} : Removed {} rows containing {} values.'
-        gg_warn(msg.format(name, n-len(df), txt))
+        gg_warn(msg.format(name, n-len(df), txt), stacklevel=3)
     return df
 
 
@@ -580,7 +615,7 @@ def to_rgba(colors, alpha):
     However :), the colors can be rgba list-likes and
     the alpha dimension will be respected.
     """
-    if colors is None:
+    if colors is None or colors == '':
         return colors
 
     def is_iterable(var):
@@ -669,7 +704,7 @@ class ColoredDrawingArea(DrawingArea):
                  clip=True, color='none'):
 
         super(ColoredDrawingArea, self).__init__(
-            width, height, xdescent, ydescent)
+            width, height, xdescent, ydescent, clip=clip)
 
         self.patch = Rectangle((0, 0), width=width,
                                height=height,
@@ -679,43 +714,23 @@ class ColoredDrawingArea(DrawingArea):
                                antialiased=False)
         self.add_artist(self.patch)
 
-    if mpl.__version__ <= '1.4.3':
-        # We do not want to draw beyond the bounds.
-        # submitted PR upstream
-        def draw(self, renderer):
-            """
-            Draw the children
-            """
-            import matplotlib.path as mpath
-            from matplotlib.transforms import TransformedPath
-            dpi_cor = renderer.points_to_pixels(1.)
-            self.dpi_transform.clear()
-            self.dpi_transform.scale(dpi_cor, dpi_cor)
-            tpath = TransformedPath(
-                mpath.Path([[0, 0], [0, self.height],
-                            [self.width, self.height],
-                            [self.width, 0]]),
-                self.get_transform())
-            for c in self._children:
-                if not c.clipbox and not c._clippath:
-                    c.set_clip_path(tpath)
-                c.draw(renderer)
 
-
-@contextlib.contextmanager
-def suppress(*exceptions):
-    """
-    Return a context manager that suppresses any of the
-    specified exceptions if they occur in the body of a
-    with statement and then resumes execution with the
-    first statement following the end of the with statement.
-
-    From python 3.4
-    """
-    try:
-        yield
-    except exceptions:
-        pass
+try:
+    from contextlib import suppress
+except ImportError:
+    # For python 2.7
+    @contextlib.contextmanager
+    def suppress(*exceptions):
+        """
+        Return a context manager that suppresses any of the
+        specified exceptions if they occur in the body of a
+        with statement and then resumes execution with the
+        first statement following the end of the with statement.
+        """
+        try:
+            yield
+        except exceptions:
+            pass
 
 
 def copy_keys(source, destination, keys=None):
@@ -763,7 +778,8 @@ def get_kwarg_names(func):
     kwarg_names = []
     args, _, _, defaults = inspect.getargspec(func)
     if defaults:
-        kwarg_names = args[:-len(defaults)]
+        kwarg_names = args[-len(defaults):]
+
     return kwarg_names
 
 

@@ -3,6 +3,7 @@ from __future__ import (absolute_import, division, print_function,
 from copy import deepcopy
 
 import pandas as pd
+import six
 
 import six
 
@@ -40,6 +41,10 @@ class geom(object):
     # plot information they receive can be plotted in a single call.
     # See: geom_point
     _units = set()
+
+    # Whether to divide the distance between any two points into
+    # multiple segments. This is done during coord.transform time
+    _munch = False
 
     def __init__(self, *args, **kwargs):
         kwargs = rename_aesthetics(kwargs)
@@ -125,6 +130,8 @@ class geom(object):
         params.update(self._stat.params)
         params['zorder'] = zorder
         for pid, pdata in data.groupby('PANEL'):
+            if len(pdata) == 0:
+                continue
             pdata.is_copy = None
             ploc = pid - 1
             panel_scales = panel.ranges[ploc]
@@ -160,6 +167,7 @@ class geom(object):
             Combined parameters for the geom and stat. Also
             includes the 'zorder'.
         """
+        data = coord.transform(data, panel_scales, self._munch)
         for _, gdata in data.groupby('group'):
             pinfos = self._make_pinfos(gdata, params)
             for pinfo in pinfos:
@@ -268,12 +276,13 @@ class geom(object):
 
     def verify_arguments(self, kwargs):
         unknown = (six.viewkeys(kwargs) -
-                   self.aesthetics() -                    # geom aesthetics
-                   six.viewkeys(self.DEFAULT_PARAMS) -       # geom parameters
-                   {'data', 'mapping'} -                  # layer parameters
-                   {'show_legend', 'inherit_aes'} -       # layer parameters
-                   self._stat.aesthetics() -              # stat aesthetics
-                   six.viewkeys(self._stat.DEFAULT_PARAMS))  # stat parameters
+                   self.aesthetics() -                  # geom aesthetics
+                   six.viewkeys(self.DEFAULT_PARAMS) -  # geom parameters
+                   {'data', 'mapping'} -                # layer parameters
+                   {'show_legend', 'inherit_aes'} -     # layer parameters
+                   self._stat.aesthetics() -            # stat aesthetics
+                   six.viewkeys(
+                       self._stat.DEFAULT_PARAMS))      # stat parameters
         if unknown:
             msg = 'Unknown parameters {}'
             raise GgplotError(msg.format(unknown))
@@ -285,7 +294,7 @@ class geom(object):
                 units.append(col)
 
         shrinkable = {'alpha', 'fill', 'color', 'size', 'linetype',
-                      'shape', 'outlier_shape'}
+                      'shape'}
 
         def prep(pinfo):
             """

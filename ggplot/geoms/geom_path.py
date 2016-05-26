@@ -23,6 +23,7 @@ class geom_path(geom):
     DEFAULT_PARAMS = {'stat': 'identity', 'position': 'identity',
                       'lineend': 'butt', 'linejoin': 'round',
                       'arrow': None}
+    _munch = True
 
     def draw_panel(self, data, panel_scales, coord, ax, **params):
         if not any(data['group'].duplicated()):
@@ -32,7 +33,7 @@ class geom_path(geom):
             gg_warn(msg)
 
         # dataframe mergesort is stable, we rely on that here
-        data.sort(columns=['group'], kind='mergesort', inplace=True)
+        data = data.sort_values('group', kind='mergesort')
         data.reset_index(drop=True, inplace=True)
 
         # drop lines with less than two points
@@ -54,6 +55,7 @@ class geom_path(geom):
         params['constant'] = constant
 
         if not constant:
+            data = coord.transform(data, panel_scales, self._munch)
             # expects len(pinfos) == 1
             pinfos = self._make_pinfos(data, params)
             self.draw_group(pinfos[0], panel_scales, coord, ax, **params)

@@ -32,11 +32,12 @@ class geom_hline(geom):
         Plot all groups
         """
         ranges = coord.range(panel_scales)
+        data = coord.transform(data, panel_scales)
         data['y'] = data['yintercept']
         data['yend'] = data['yintercept']
         data['x'] = ranges.x[0]
         data['xend'] = ranges.x[1]
-        data.drop_duplicates(inplace=True)
+        data = data.drop_duplicates()
 
         for _, gdata in data.groupby('group'):
             pinfos = self._make_pinfos(gdata, params)

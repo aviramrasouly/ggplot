@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from ..utils.exceptions import GgplotError
-from ..utils import ninteraction
+from ..utils import ninteraction, add_margins
 
 
 def layout_null(data):
@@ -95,17 +95,23 @@ def layout_grid(data, rows=None, cols=None, margins=None,
     base = cross_join(base_rows, base_cols)
 
     if margins:
-        # TODO: Implement this
-        pass
+        base = add_margins(base, [rows, cols], margins)
+        base = base.drop_duplicates().reset_index(drop=True)
+
+    n = len(base)
+    panel = ninteraction(base, drop=True)
+    panel = pd.Categorical(panel, categories=range(1, n+1))
 
     rows = 1 if not rows else ninteraction(base[rows], drop=True)
     cols = 1 if not cols else ninteraction(base[cols], drop=True)
 
-    n = len(base)
-    panels = pd.DataFrame({'PANEL': pd.Categorical(range(1, n+1)),
+    panels = pd.DataFrame({'PANEL': panel,
                            'ROW': rows,
                            'COL': cols})
     panels = pd.concat([panels, base], axis=1)
+    panels = panels.sort_values('PANEL')
+    panels.reset_index(drop=True, inplace=True)
+
     return panels
 
 
@@ -138,13 +144,13 @@ def layout_base(data, vars=None, drop=True):
             "used for facetting")
     base = pd.concat([x for i, x in enumerate(values) if has_all[i]],
                      axis=0)
-    base.drop_duplicates(inplace=True)
+    base = base.drop_duplicates()
 
     if not drop:
         base = unique_combs(base)
 
     # sorts according to order of factor levels
-    base.sort(columns=list(base.columns), inplace=True)
+    base = base.sort_values(list(base.columns))
 
     # Systematically add on missing combinations
     for i, value in enumerate(values):
@@ -211,7 +217,9 @@ def wrap_dims(n, nrow=None, ncol=None):
         nrow = int(np.ceil(n/ncol))
     if not nrow * ncol >= n:
         raise GgplotError(
-            'Allocated fewer panels than are required')
+            "Allocated fewer panels than are required. "
+            "Make sure the number of rows and columns can "
+            "hold all the plot panels.")
     return (nrow, ncol)
 
 

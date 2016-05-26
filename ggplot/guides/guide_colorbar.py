@@ -47,12 +47,17 @@ class guide_colorbar(guide):
 
         # value = breaks (numeric) is used for determining the
         # position of ticks
-        breaks = scale.scale_breaks(can_waive=False)
+        limits = scale.limits
+        breaks = scale.get_breaks(strict=True)
         breaks = np.asarray(breaks)
         breaks = breaks[~np.isnan(breaks)]
+
+        if not len(breaks):
+            return None
+
         self.key = pd.DataFrame({
             scale.aesthetics[0]: scale.map(breaks),
-            'label': scale.scale_labels(breaks, can_waive=False),
+            'label': scale.get_labels(breaks),
             'value': breaks})
 
         if self.draw_ulim and self.draw_llim:
@@ -65,9 +70,9 @@ class guide_colorbar(guide):
             prune = 'lower'
         bar = MaxNLocator(self.nbin,
                           steps=[1, 2, 5, 10],
-                          prune=prune).tick_values(*scale.limits)
+                          prune=prune).tick_values(*limits)
         # discard locations in bar not in scale.limits
-        bar = [x for x in bar if scale.limits[0] <= x <= scale.limits[1]]
+        bar = bar.compress((limits[0] <= bar) & (bar <= limits[1]))
         self.bar = pd.DataFrame({
             'color': scale.map(bar),
             'value': bar})
@@ -114,9 +119,9 @@ class guide_colorbar(guide):
         """
         obverse = slice(0, None)
         reverse = slice(None, None, -1)
-        sep = 0.3 * 20  # gap between the keys, .3 lines
         width = self.barwidth
         height = self.barheight
+        sep = .13 * width  # gap between the bar and labels
         nbars = len(self.bar)
         length = height
         direction = self.direction

@@ -10,13 +10,13 @@ import matplotlib.text as mtext
 import matplotlib.patches as mpatch
 from six.moves import zip
 
-from .components.aes import make_labels
+from .components.aes import aes, make_labels
 from .components.panel import Panel
 from .components.layer import Layers
 from .facets import facet_null, facet_grid, facet_wrap
-from .themes.theme_gray import theme_gray
-from .utils import is_waive, suppress
+from .themes.theme import theme_get
 from .utils.ggutils import gg_context, ggplot_options
+from .utils.exceptions import GgplotError
 from .scales.scales import Scales
 from .scales.scales import scales_add_missing
 from .coords import coord_cartesian
@@ -52,9 +52,19 @@ class ggplot(object):
     CONTINUOUS = ['x', 'y', 'size', 'alpha']
     DISCRETE = ['color', 'shape', 'marker', 'alpha', 'linestyle']
 
-    def __init__(self, mapping, data):
-        if not isinstance(data, pd.DataFrame):
+    def __init__(self, mapping=None, data=None):
+        # Allow some sloppiness
+        if mapping is None:
+            mapping = aes()
+
+        if not isinstance(mapping, aes):
             mapping, data = data, mapping
+
+        if (data is not None and
+                not isinstance(data, pd.DataFrame)):
+            raise GgplotError(
+                'data must be a dataframe or None if each '
+                'layer will have separate data.')
 
         self.data = data
         self.mapping = mapping
@@ -63,8 +73,7 @@ class ggplot(object):
         self.layers = Layers()
         self.guides = guides()
         self.scales = Scales()
-        # default theme is theme_gray
-        self.theme = theme_gray()
+        self.theme = None
         self.coordinates = coord_cartesian()
         self.plot_env = mapping.aes_env
         self.panel = None
@@ -134,8 +143,16 @@ class ggplot(object):
         """
         Render the complete plot and return the matplotlib figure
         """
+        # Prevent against any modifications to the users
+        # ggplot object. Do the copy here as we may/may not
+        # assign a default theme
+        self = deepcopy(self)
+
         if ggplot_options['close_all_figures']:
             plt.close("all")
+
+        # If no theme we use the default
+        self.theme = self.theme or theme_get()
 
         with gg_context(theme=self.theme):
             plot = self.draw_plot()
@@ -198,7 +215,7 @@ class ggplot(object):
         plot : ggplot
             A copy of the ggplot object
         """
-        plot = deepcopy(self)
+        plot = self
 
         if not plot.layers:
             plot += geom_blank()
@@ -274,15 +291,19 @@ class ggplot(object):
             return plot
 
         position = plot.theme._params['legend_position']
+
         # At what point (e.g [.94, .5]) on the figure
         # to place which point (e.g 6, for center left) of
         # the legend box
+        _x = 0.92
+        # Prevent overlap with the facet label
+        if isinstance(plot.facet, facet_grid):
+            _x += .025 * len(plot.facet.rows)
         lookup = {
-            'right':  (6, (0.92, 0.5)),  # center left
+            'right': (6, (_x, 0.5)),     # center left
             'left': (7, (0.07, 0.5)),    # center right
             'top': (8, (0.5, 0.92)),     # bottom center
-            'bottom': (9, (0.5, 0.07))   # upper center
-        }
+            'bottom': (9, (0.5, 0.07))}  # upper center
         loc, box_to_anchor = lookup[position]
         anchored_box = AnchoredOffsetbox(
             loc=loc,
@@ -292,8 +313,8 @@ class ggplot(object):
             # Spacing goes here
             bbox_to_anchor=box_to_anchor,
             bbox_transform=plot.figure.transFigure,
-            borderpad=0.,
-        )
+            borderpad=0.)
+
         plot.figure._themeable['legend_background'] = anchored_box
         ax = plot.axs[0]
         ax.add_artist(anchored_box)
@@ -324,26 +345,17 @@ def set_breaks_and_labels(plot, ranges, finfo, ax):
     ax.set_xlim(ranges['x_range'])
     ax.set_ylim(ranges['y_range'])
 
-    # breaks and labels for when the user set
-    # them explicitly
-    def setter(ax_set_method, value, **kwargs):
-        """Call axes set method if value is available"""
-        if not is_waive(value) and value is not None:
-            ax_set_method(value, **kwargs)
+    # breaks
+    ax.set_xticks(ranges['x_major'])
+    ax.set_yticks(ranges['y_major'])
 
-    setter(ax.set_xticks, ranges['x_major'])
-    setter(ax.set_yticks, ranges['y_major'])
-    setter(ax.set_xticks, ranges['x_minor'], minor=True)
-    setter(ax.set_yticks, ranges['y_minor'], minor=True)
-    setter(ax.set_xticklabels, ranges['x_labels'])
-    setter(ax.set_yticklabels, ranges['y_labels'])
+    # minor breaks
+    ax.set_xticks(ranges['x_minor'], minor=True)
+    ax.set_yticks(ranges['y_minor'], minor=True)
 
-    # Add axis Locators and Formatters for when
-    # the mpl deals with the breaks and labels
-    pscales = plot.scales.position_scales()
-    for sc in pscales:
-        with suppress(AttributeError):
-            sc.trans.modify_axis(ax)
+    # labels
+    ax.set_xticklabels(ranges['x_labels'])
+    ax.set_yticklabels(ranges['y_labels'])
 
     bottomrow = finfo['ROW'] == plot.facet.nrow
     leftcol = finfo['COL'] == 1
@@ -379,20 +391,30 @@ def add_labels_and_title(plot):
     xlabel = plot.labels.get('x', '')
     ylabel = plot.labels.get('y', '')
     title = plot.labels.get('title', '')
+    center = 0.5
+
+    # This is finicky. Should be changed when MPL
+    # finally has a constraint based layout manager.
+    xtitle_y = 0.08
+    ytitle_x = 0.09
+    title_y = 0.92
+    if isinstance(plot.facet, facet_wrap):
+        title_y += 0.025 * len(plot.facet.vars)
+    elif isinstance(plot.facet, facet_grid):
+        title_y += 0.04 * len(plot.facet.cols)
 
     d = dict(
-        axis_title_x=fig.text(0.5, 0.08, xlabel,
+        axis_title_x=fig.text(center, xtitle_y, xlabel,
                               ha='center', va='top'),
-        axis_title_y=fig.text(0.09, 0.5, ylabel,
+        axis_title_y=fig.text(ytitle_x, center, ylabel,
                               ha='right', va='center',
                               rotation='vertical'),
-        plot_title=fig.text(0.5, 0.92, title,
+        plot_title=fig.text(center, title_y, title,
                             ha='center', va='bottom'))
 
     fig._themeable.update(d)
 
 
-# TODO Need to use theme (element_rect) for the colors
 def draw_facet_label(plot, finfo, ax):
     """
     Draw facet label onto the axes.
@@ -434,17 +456,9 @@ def draw_facet_label(plot, finfo, ax):
     fs = float(plot.theme._rcParams['font.size'])
 
     # linewidth in transAxes
-    lwy = fs / (72.27*h)
-    lwx = fs / (72.27*w)
-
-    # bbox height (along direction of text) of
-    # labels in transAxes
-    hy = 1.6 * lwy
-    hx = 1.6 * lwx
-
-    # text location in transAxes
-    y = 1 + hy/2.4
-    x = 1 + hx/2.4
+    pad = linespacing = 1.5
+    lwy = (pad+fs) / (72.27*h)
+    lwx = (pad+fs) / (72.27*w)
 
     themeable = plot.figure._themeable
     for key in ('strip_text_x', 'strip_text_y',
@@ -452,23 +466,35 @@ def draw_facet_label(plot, finfo, ax):
         if key not in themeable:
             themeable[key] = []
 
-    def draw_label(label, location):
+    def draw_label(label_info, location):
         """
         Create a background patch and put a label on it
         """
-        rotation = 90
+        num_lines = len(label_info)
+
+        # bbox height (along direction of text) of
+        # labels in transAxes
+        hy = pad * lwy * num_lines
+        hx = pad * lwx * num_lines
+
+        # text location in transAxes
+        y = 1 + hy/2.0
+        x = 1 + hx/2.0
+
         if location == 'right':
             _x, _y = x, 0.5
             xy = (1, 0)
             rotation = -90
             box_width = hx
             box_height = 1
+            label = '\n'.join(reversed(label_info))
         else:
             _x, _y = 0.5, y
             xy = (0, 1)
             rotation = 0
             box_width = 1
             box_height = hy
+            label = '\n'.join(label_info)
 
         rect = mpatch.FancyBboxPatch(xy,
                                      width=box_width,
@@ -486,6 +512,7 @@ def draw_facet_label(plot, finfo, ax):
                           rotation=rotation,
                           verticalalignment='center',
                           horizontalalignment='center',
+                          linespacing=linespacing,
                           zorder=1.2,  # higher than rect
                           clip_on=False)
 
@@ -499,19 +526,28 @@ def draw_facet_label(plot, finfo, ax):
             themeable['strip_background_x'].append(rect)
             themeable['strip_text_x'].append(text)
 
+    # some meta information is added label information
+    # to help out the labellers
+
     # facet_wrap #
     if fcwrap:
-        label = finfo[plot.facet.vars[0]]
-        draw_label(label, 'top')
+        label_info = finfo[list(plot.facet.vars)]
+        label_info._meta = {'dimension': 'cols'}
+        label_info = plot.facet.labeller(label_info)
+        draw_label(label_info, 'top')
 
     # facet_grid #
-    if fcgrid and toprow:
-        label = finfo[plot.facet.cols[0]]
-        draw_label(label, 'top')
+    if fcgrid and toprow and len(plot.facet.cols):
+        label_info = finfo[list(plot.facet.cols)]
+        label_info._meta = {'dimension': 'cols'}
+        label_info = plot.facet.labeller(label_info)
+        draw_label(label_info, 'top')
 
     if fcgrid and rightcol and len(plot.facet.rows):
-        label = finfo[plot.facet.rows[0]]
-        draw_label(label, 'right')
+        label_info = finfo[list(plot.facet.rows)]
+        label_info._meta = {'dimension': 'rows'}
+        label_info = plot.facet.labeller(label_info)
+        draw_label(label_info, 'right')
 
 
 def apply_facet_spacing(plot):
@@ -519,6 +555,7 @@ def apply_facet_spacing(plot):
     # and vertical lengths since the values are in
     # transAxes dimensions
     if isinstance(plot.facet, facet_wrap):
-        plt.subplots_adjust(wspace=.05, hspace=.20)
+        hspace = len(plot.facet.vars) * .20
+        plt.subplots_adjust(wspace=.05, hspace=hspace)
     else:
         plt.subplots_adjust(wspace=.05, hspace=.05)

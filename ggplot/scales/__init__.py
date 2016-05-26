@@ -54,6 +54,9 @@ from .scale_size import scale_size_area
 from .scale_size import scale_size_continuous
 from .scale_size import scale_size_discrete
 from .scale_size import scale_size_radius
+# stroke
+from .scale_stroke import scale_stroke
+from .scale_stroke import scale_stroke_continuous
 # xy position and transforms
 from .scale_xy import scale_x_datetime, scale_x_date
 from .scale_xy import scale_x_discrete, scale_x_continuous
@@ -69,6 +72,8 @@ from .utils import date_breaks, date_format
 # format functions
 from .utils import dollar, currency, comma, millions
 from .utils import percent, scientific
+# limits
+from .limits import xlim, ylim, lims
 
 
 __all__ = [
@@ -102,6 +107,8 @@ __all__ = [
            'scale_size', 'scale_size_area',
            'scale_size_discrete', 'scale_size_continuous',
            'scale_size_radius',
+           # stroke
+           'scale_stroke', 'scale_stroke_continuous',
            # identity
            'scale_alpha_identity', 'scale_color_identity',
            'scale_colour_identity', 'scale_fill_identity',
@@ -125,5 +132,7 @@ __all__ = [
            'date_breaks', 'date_format',
            # format functions
            'dollar', 'currency', 'comma', 'millions',
-           'percent', 'scientific'
+           'percent', 'scientific',
+           # limits
+           'xlim', 'ylim', 'lims',
            ]

@@ -44,6 +44,8 @@ class position(object):
             # Given data belonging to a specific panel, grab
             # the corresponding scales and call the method
             # that does the real computation
+            if len(pdata) == 0:
+                return pdata
             pscales = panel.panel_scales(pdata['PANEL'].iat[0])
             return cls.compute_panel(pdata, pscales, params)
 
@@ -80,12 +82,10 @@ class position(object):
         trans_y : function
             Transforms y scale mappings
             Takes one argument, either a scalar or an array-type
-
-        Helper function for self.adjust
         """
         # Aesthetics that map onto the x and y scales
         X = {'x', 'xmin', 'xmax', 'xend', 'xintercept'}
-        Y = {'y', 'ymin', 'xmax', 'yend', 'yintercept'}
+        Y = {'y', 'ymin', 'ymax', 'yend', 'yintercept'}
 
         if trans_x:
             xs = [name for name in data.columns if name in X]
@@ -94,4 +94,8 @@ class position(object):
         if trans_y:
             ys = [name for name in data.columns if name in Y]
             data[ys] = data[ys].apply(trans_y)
+
         return data
+
+
+transform_position = position.transform_position

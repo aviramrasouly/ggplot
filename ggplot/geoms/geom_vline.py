@@ -32,11 +32,12 @@ class geom_vline(geom):
         Plot all groups
         """
         ranges = coord.range(panel_scales)
+        data = coord.transform(data, panel_scales)
         data['x'] = data['xintercept']
         data['xend'] = data['xintercept']
         data['y'] = ranges.y[0]
         data['yend'] = ranges.y[1]
-        data.drop_duplicates(inplace=True)
+        data = data.drop_duplicates()
 
         for _, gdata in data.groupby('group'):
             pinfos = self._make_pinfos(gdata, params)

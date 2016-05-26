@@ -6,6 +6,7 @@ import pandas as pd
 
 from ..utils import groupby_apply
 from ..utils.exceptions import GgplotError, gg_warn
+from ..scales.utils import freedman_diaconis_bins
 from .stat_bin import bin
 from .stat import stat
 
@@ -27,11 +28,11 @@ class stat_bindot(stat):
         if (params['breaks'] is None and
                 params['binwidth'] is None and
                 params['bins'] is None):
-            msg = ("'stat_bindot()' using 'bins = 30'. "
-                   "Pick better value with 'bins' or 'binwidth'.")
             params = params.copy()
-            params['bins'] = 30
-            gg_warn(msg)
+            params['bins'] = freedman_diaconis_bins(data['x'])
+            msg = ("'stat_bin()' using 'bins = {}'. "
+                   "Pick better value with 'binwidth'.")
+            gg_warn(msg.format(params['bins']))
 
         return params
 
@@ -44,18 +45,18 @@ class stat_bindot(stat):
                                      weight=data.get('weight'),
                                      binwidth=params['binwidth'],
                                      bins=params['bins'])
-                data.sort(columns='x', inplace=True)
+                data = data.sort_values('x')
                 data.reset_index(inplace=True, drop=True)
-                newdata.sort(columns='x', inplace=True)
+                newdata = newdata.sort_values('x')
                 newdata.reset_index(inplace=True, drop=True)
             elif params['binaxis'] == 'y':
                 newdata = densitybin(x=data['y'],
                                      weight=data.get('weight'),
                                      binwidth=params['binwidth'],
                                      bins=params['bins'])
-                data.sort(columns='y', inplace=True)
+                data = data.sort_values('y')
                 data.reset_index(inplace=True, drop=True)
-                newdata.sort(columns='x', inplace=True)
+                newdata = newdata.sort_values('x')
                 newdata.reset_index(inplace=True, drop=True)
 
             data['bin'] = newdata['bin']
